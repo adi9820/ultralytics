@@ -1828,7 +1828,7 @@ class A2C2f(nn.Module):
         torch.Size([1, 512, 32, 32])
     """
 
-    def __init__(self, c1, c2, n=1, k=1 a2=True, area=1, residual=False, mlp_ratio=2.0, e=0.5, g=1, shortcut=True):
+    def __init__(self, c1, c2, n=1, k=1, a2=True, area=1, residual=False, mlp_ratio=2.0, e=0.5, g=1, shortcut=True):
         """
         Initialize Area-Attention C2f module.
 
