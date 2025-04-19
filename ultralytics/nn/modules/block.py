@@ -1828,7 +1828,7 @@ class A2C2f(nn.Module):
         torch.Size([1, 512, 32, 32])
     """
 
-    def __init__(self, c1, c2, n=1, a2=True, area=1, residual=False, mlp_ratio=2.0, e=0.5, g=1, shortcut=True):
+    def __init__(self, c1, c2, n=1, a2=True, area=1, k=3, residual=False, mlp_ratio=2.0, e=0.5, g=1, shortcut=True):
         """
         Initialize Area-Attention C2f module.
 
@@ -1848,7 +1848,7 @@ class A2C2f(nn.Module):
         c_ = int(c2 * e)  # hidden channels
         assert c_ % 32 == 0, "Dimension of ABlock be a multiple of 32."
 
-        k=3
+        
         p=k//2
         self.cv1 = Conv(c1, c_, k, 1, p)
         self.cv2 = Conv((1 + n) * c_, c2, k, 1, p)
