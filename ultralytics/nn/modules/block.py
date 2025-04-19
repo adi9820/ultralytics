@@ -1849,8 +1849,9 @@ class A2C2f(nn.Module):
         assert c_ % 32 == 0, "Dimension of ABlock be a multiple of 32."
 
         k=3
-        self.cv1 = Conv(c1, c_, k, 1)
-        self.cv2 = Conv((1 + n) * c_, c2, k)
+        p=k//2
+        self.cv1 = Conv(c1, c_, k, 1, p)
+        self.cv2 = Conv((1 + n) * c_, c2, k, 1, p)
 
         self.gamma = nn.Parameter(0.01 * torch.ones(c2), requires_grad=True) if a2 and residual else None
         self.m = nn.ModuleList(
