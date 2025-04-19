@@ -1848,8 +1848,8 @@ class A2C2f(nn.Module):
         c_ = int(c2 * e)  # hidden channels
         assert c_ % 32 == 0, "Dimension of ABlock be a multiple of 32."
 
-        self.cv1 = Conv(c1, c_, 1, 1)
-        self.cv2 = Conv((1 + n) * c_, c2, 1)
+        self.cv1 = Conv(c1, c_, 1, k)
+        self.cv2 = Conv((1 + n) * c_, c2, k)
 
         self.gamma = nn.Parameter(0.01 * torch.ones(c2), requires_grad=True) if a2 and residual else None
         self.m = nn.ModuleList(
