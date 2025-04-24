@@ -333,7 +333,19 @@ class C3(nn.Module):
 
     def forward(self, x):
         """Forward pass through the CSP bottleneck with 3 convolutions."""
-        return self.cv3(torch.cat((self.m(self.cv1(x)), self.cv2(x)), 1))
+        y1 = self.cv1(x)
+        y2 = self.cv2(x)
+        y = torch.cat((self.m(y1), y2), 1)
+        return self.cv3(y)
+
+    def forward_split(self, x):
+        """Forward pass using split() instead of chunk()."""
+        y1 = self.cv1(x)
+        y2 = self.cv2(x)
+        y1_split, y2_split = y1.split(y1.shape[1] // 2, 1)  # Split along the channel dimension
+        y = torch.cat((self.m(y1_split), y2_split), 1)
+        return self.cv3(y)
+
 
 
 class C3x(C3):
