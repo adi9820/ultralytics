@@ -1824,7 +1824,7 @@ class A2C2f(nn.Module): # ABC3
         self.a2 = a2
         self.cv1 = Conv(c1, c_, 1, 1)
         if a2:
-            self.cv2 = Conv(c1, c_, 5, 1, 1)
+            self.cv2 = Conv(c1, c_, 3, 1, 1)
         else:
             self.cv2 = Conv(c1, c_, 1, 1)
         self.cv3 = Conv(2 * c_, c2, 3)  # Output channels after concatenation
