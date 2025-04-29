@@ -1820,10 +1820,13 @@ class A2C2f(nn.Module): # ABC3
     def __init__(self, c1, c2, n=1, a2=True, area=1, residual=False, g=1, e=0.5, mlp_ratio=2.0, shortcut=True):
         super().__init__()
         c_ = int(c2 * e)  # Calculate intermediate channels using expansion ratio
-        
+        self.a2 = a2
         self.cv1 = Conv(c1, c_, 1, 1)
-        self.cv2 = Conv(c1, c_, 1, 1)
-        self.cv3 = Conv(2 * c_, c2, 5)  # Output channels after concatenation
+        if a2:
+            self.cv2 = Conv(c1, c_, 3, 1, 1)
+        else:
+            self.cv2 = Conv(c1, c_, 1, 1)
+        self.cv3 = Conv(2 * c_, c2, 3)  # Output channels after concatenation
 
         if a2 and residual:
             self.gamma = nn.Parameter(0.01 * torch.ones(1, c2, 1, 1), requires_grad=True)  # Correct the gamma shape
@@ -1831,15 +1834,19 @@ class A2C2f(nn.Module): # ABC3
 
         if a2:
             self.m = nn.Sequential(*(ABlock(c_, c_ // 32, mlp_ratio, area) for _ in range(n)))
-            self.n = nn.Sequential(*(BottleneckCSP(c_, c_, shortcut, g=2, e=1.0) for _ in range(n)))
         else:
-            self.m = nn.Sequential(*(Bottleneck(c_, c_, shortcut, g=2, k=((3, 3), (1, 1)), e=1.0) for _ in range(n)))
-            self.n = nn.Sequential(*(Bottleneck(c_, c_, shortcut, g=2, k=((1, 1), (3, 3)), e=1.0) for _ in range(n)))
+            self.m = nn.Sequential(*(Bottleneck(c_, c_, shortcut, g=2, k=((3, 3), (3, 3)), e=1.0) for _ in range(n)))
+            self.n = nn.Sequential(*(BottleneckCSP(c_, c_, shortcut, g=2, e=1.0) for _ in range(n)))
             
     def forward(self, x):
-        y1 = self.m(self.cv1(x))  # Apply attention blocks and csp bottleneck on the first convolution output
-        y2 = self.n(self.cv2(x))  # Apply bottleneck on the second convolution output
-        out = self.cv3(torch.cat((y1, y2), 1))  # Concatenate and apply third convolution
+        if self.a2:
+            y1 = self.m(self.cv1(x))  # Apply attention blocks and csp bottleneck on the first convolution output
+            y2 = self.cv2(x)  # Apply bottleneck on the second convolution output
+            out = self.cv3(torch.cat((y1, y2), 1))  # Concatenate and apply third convolution
+        else:
+            y1 = self.m(self.cv1(x))  # Apply attention blocks and csp bottleneck on the first convolution output
+            y2 = self.n(self.cv2(x))  # Apply bottleneck on the second convolution output
+            out = self.cv3(torch.cat((y1, y2), 1))  # Concatenate and apply third convolution
         
         if hasattr(self, 'gamma') and self.gamma is not None:
             # Ensure that gamma is applied only if it exists
