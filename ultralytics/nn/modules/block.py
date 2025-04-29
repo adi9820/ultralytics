@@ -1844,8 +1844,7 @@ class A2C2f(nn.Module): # ABC3
         
         y1 = self.m(self.cv1(x))  # Apply attention blocks and csp bottleneck on the first convolution output
         y2 = self.n(self.cv2(x))  # Apply bottleneck on the second convolution output
-        out = self.cv3(torch.cat((y1, y2), 1))  # Concatenate and apply third convolution
-            
+        out = self.cv3(torch.cat((y1, y2), 1))  # Concatenate and apply third convolution    
         if hasattr(self, 'gamma') and self.gamma is not None:
             # Ensure that gamma is applied only if it exists
             if x.shape[1] != out.shape[1]:
