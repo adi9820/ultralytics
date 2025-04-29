@@ -1816,15 +1816,14 @@ class ABlock(nn.Module):
         return x + self.mlp(x)
 
 
-class A2C2f(nn.Module): # A2C3k
-    def __init__(self, c1, c2, n=1, a2=True, area=1, k=1, residual=False, g=1, e=0.5, mlp_ratio=2.0, shortcut=True):
+class A2C2f(nn.Module): # ABC3
+    def __init__(self, c1, c2, n=1, a2=True, area=1, residual=False, g=1, e=0.5, mlp_ratio=2.0, shortcut=True):
         super().__init__()
-        p = k // 2
         c_ = int(c2 * e)  # Calculate intermediate channels using expansion ratio
         
-        self.cv1 = Conv(c1, c_, k, 1, p)
-        self.cv2 = Conv(c1, c_, k, 1, p)
-        self.cv3 = Conv(2 * c_, c2, k)  # Output channels after concatenation
+        self.cv1 = Conv(c1, c_, 1, 1)
+        self.cv2 = Conv(c1, c_, 1, 1)
+        self.cv3 = Conv(2 * c_, c2, 1)  # Output channels after concatenation
 
         if a2 and residual:
             self.gamma = nn.Parameter(0.01 * torch.ones(1, c2, 1, 1), requires_grad=True)  # Correct the gamma shape
