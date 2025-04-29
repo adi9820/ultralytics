@@ -1816,79 +1816,41 @@ class ABlock(nn.Module):
         return x + self.mlp(x)
 
 
-class A2C2f(nn.Module):
-    """
-    Area-Attention C2f module for enhanced feature extraction with area-based attention mechanisms.
-
-    This module extends the C2f architecture by incorporating area-attention and ABlock layers for improved feature
-    processing. It supports both area-attention and standard convolution modes.
-
-    Attributes:
-        cv1 (Conv): Initial 1x1 convolution layer that reduces input channels to hidden channels.
-        cv2 (Conv): Final 1x1 convolution layer that processes concatenated features.
-        gamma (nn.Parameter | None): Learnable parameter for residual scaling when using area attention.
-        m (nn.ModuleList): List of either ABlock or C3k modules for feature processing.
-
-    Methods:
-        forward: Processes input through area-attention or standard convolution pathway.
-
-    Examples:
-        >>> m = A2C2f(512, 512, n=1, a2=True, area=1)
-        >>> x = torch.randn(1, 512, 32, 32)
-        >>> output = m(x)
-        >>> print(output.shape)
-        torch.Size([1, 512, 32, 32])
-    """
-
-    def __init__(self, c1, c2, n=1, a2=True, area=1, k=3, residual=False, mlp_ratio=2.0, e=0.5, g=1, shortcut=True):
-        """
-        Initialize Area-Attention C2f module.
-
-        Args:
-            c1 (int): Number of input channels.
-            c2 (int): Number of output channels.
-            n (int): Number of ABlock or C3k modules to stack.
-            a2 (bool): Whether to use area attention blocks. If False, uses C3k blocks instead.
-            area (int): Number of areas the feature map is divided.
-            residual (bool): Whether to use residual connections with learnable gamma parameter.
-            mlp_ratio (float): Expansion ratio for MLP hidden dimension.
-            e (float): Channel expansion ratio for hidden channels.
-            g (int): Number of groups for grouped convolutions.
-            shortcut (bool): Whether to use shortcut connections in C3k blocks.
-        """
+class A2C2f(nn.Module): # A2C3k
+    def __init__(self, c1, c2, n=1, a2=True, area=1, k=1, residual=False, g=1, e=0.5, mlp_ratio=2.0, shortcut=True):
         super().__init__()
-        c_ = int(c2 * e)  # hidden channels
-        assert c_ % 32 == 0, "Dimension of ABlock be a multiple of 32."
-
+        p = k // 2
+        c_ = int(c2 * e)  # Calculate intermediate channels using expansion ratio
         
-        p=k//2
         self.cv1 = Conv(c1, c_, k, 1, p)
-        self.cv2 = Conv((1 + n) * c_, c2, k, 1, p)
+        self.cv2 = Conv(c1, c_, k, 1, p)
+        self.cv3 = Conv(2 * c_, c2, k)  # Output channels after concatenation
 
-        self.gamma = nn.Parameter(0.01 * torch.ones(c2), requires_grad=True) if a2 and residual else None
-        self.m = nn.ModuleList(
-            nn.Sequential(*(ABlock(c_, c_ // 32, mlp_ratio, area) for _ in range(2)))
-            if a2
-            else C3k(c_, c_, 2, shortcut, g)
-            for _ in range(n)
-        )
+        if a2 and residual:
+            self.gamma = nn.Parameter(0.01 * torch.ones(1, c2, 1, 1), requires_grad=True)  # Correct the gamma shape
+            self.cv_residual = Conv(c_, c2, 1)  # Add a 1x1 convolution to match dimensions if needed
 
+        if a2:
+            self.m = nn.Sequential(*(ABlock(c_, c_ // 32, mlp_ratio, area) for _ in range(n)))
+            self.n = nn.Sequential(*(BottleneckCSP(c_, c_, shortcut, g=2, e=1.0) for _ in range(n)))
+        else:
+            self.m = nn.Sequential(*(Bottleneck(c_, c_, shortcut, g=2, k=((3, 3), (1, 1)), e=1.0) for _ in range(n)))
+            self.n = nn.Sequential(*(Bottleneck(c_, c_, shortcut, g=2, k=((1, 1), (3, 3)), e=1.0) for _ in range(n)))
+            
     def forward(self, x):
-        """
-        Forward pass through A2C2f layer.
+        y1 = self.m(self.cv1(x))  # Apply attention blocks and csp bottleneck on the first convolution output
+        y2 = self.n(self.cv2(x))  # Apply bottleneck on the second convolution output
+        out = self.cv3(torch.cat((y1, y2), 1))  # Concatenate and apply third convolution
+        
+        if hasattr(self, 'gamma') and self.gamma is not None:
+            # Ensure that gamma is applied only if it exists
+            if x.shape[1] != out.shape[1]:
+                x = self.cv_residual(x)  # Apply 1x1 convolution to match channels
+            out = x + self.gamma * out  # Apply residual connection if gamma is present
+        else:
+            out = out  # Skip residual connection if gamma is not defined
 
-        Args:
-            x (torch.Tensor): Input tensor.
-
-        Returns:
-            (torch.Tensor): Output tensor after processing.
-        """
-        y = [self.cv1(x)]
-        y.extend(m(y[-1]) for m in self.m)
-        y = self.cv2(torch.cat(y, 1))
-        if self.gamma is not None:
-            return x + self.gamma.view(-1, len(self.gamma), 1, 1) * y
-        return y
+        return out
 
 
 class SwiGLUFFN(nn.Module):
