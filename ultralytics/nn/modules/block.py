@@ -1823,7 +1823,7 @@ class A2C2f(nn.Module): # ABC3
         
         self.cv1 = Conv(c1, c_, 1, 1)
         self.cv2 = Conv(c1, c_, 1, 1)
-        self.cv3 = Conv(2 * c_, c2, 1)  # Output channels after concatenation
+        self.cv3 = Conv(2 * c_, c2, 5)  # Output channels after concatenation
 
         if a2 and residual:
             self.gamma = nn.Parameter(0.01 * torch.ones(1, c2, 1, 1), requires_grad=True)  # Correct the gamma shape
