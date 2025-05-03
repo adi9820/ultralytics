@@ -1778,7 +1778,7 @@ class ABlock(nn.Module):
         self.apply(self._init_weights)
 
         self.attn2 = Attention(dim, attn_ratio=0.5, num_heads=num_heads)
-        self.ffn = nn.Sequential(Conv(dim, dim * 2, 1), Conv(dim * 2, dim, 1, act=False))
+        self.ffn = nn.Sequential(Conv(dim, mlp_hidden_dim, 1), Conv(mlp_hidden_dim, dim, 1, act=False))
         self.add = shortcut
 
     def _init_weights(self, m):
