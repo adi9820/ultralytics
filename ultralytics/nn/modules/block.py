@@ -1760,7 +1760,7 @@ class ABlock(nn.Module):
         torch.Size([1, 256, 32, 32])
     """
 
-    def __init__(self, dim, num_heads, mlp_ratio=1.2, area=1, shortcut=True):
+    def __init__(self, dim, num_heads, mlp_ratio=1.2, area=1):
         """
         Initialize an Area-attention block module.
 
@@ -1769,17 +1769,18 @@ class ABlock(nn.Module):
             num_heads (int): Number of heads into which the attention mechanism is divided.
             mlp_ratio (float): Expansion ratio for MLP hidden dimension.
             area (int): Number of areas the feature map is divided.
+            
         """
         super().__init__()
-
-        self.attn1 = AAttn(dim, num_heads=num_heads, area=area)
+        
+        self.attn1 = AAttn(dim, num_heads=num_heads, area=1)
+        if area>1:
+            self.attn2 = AAttn(dim, num_heads=num_heads, area=area)
         mlp_hidden_dim = int(dim * mlp_ratio)
-        self.mlp = nn.Sequential(Conv(dim, mlp_hidden_dim, 1), Conv(mlp_hidden_dim, dim, 1, act=False))
+        self.mlp = nn.Sequential(Conv(dim, mlp_hidden_dim, 3), Conv(mlp_hidden_dim, dim, 3, act=False))
+        self.area = area
+        
         self.apply(self._init_weights)
-
-        self.attn2 = Attention(dim, attn_ratio=0.5, num_heads=num_heads)
-        self.ffn = nn.Sequential(Conv(dim, mlp_hidden_dim, 1), Conv(mlp_hidden_dim, dim, 1, act=False))
-        self.add = shortcut
 
     def _init_weights(self, m):
         """
@@ -1803,15 +1804,12 @@ class ABlock(nn.Module):
         Returns:
             (torch.Tensor): Output tensor after area-attention and feed-forward processing.
         """
-        x1=x
-        x1 = x1 + self.attn1(x1)
-        x1 = x1 + self.mlp(x1)
-
-        x2=x
-        x2 = x2+ self.attn2(x2) if self.add else self.attn(x2)
-        x2 = x2 + self.ffn(x2) if self.add else self.ffn(x2)
-
-        x=(x1+x2)/2
+        x1 = x+ self.attn1(x)
+        if self.area>1:
+            x2 = x + self.attn2(x)
+            x1 = ((x1**2 + x2**2)/2)**0.5
+        
+        x = x1 + self.mlp(x1)
         return x
 
 
