@@ -1809,7 +1809,7 @@ class ABlock(nn.Module):
 
         x2=x
         x2 = x2+ self.attn2(x2) if self.add else self.attn(x2)
-        x2 = x2 + self.ffn(x) if self.add else self.ffn(x2)
+        x2 = x2 + self.ffn(x2) if self.add else self.ffn(x2)
 
         x=(x1+x2)/2
         return x
