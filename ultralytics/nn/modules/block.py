@@ -314,7 +314,7 @@ class C3(nn.Module):
 
     def __init__(self, c1, c2, n=1, shortcut=True, g=1, e=0.5):
         """
-        Faster Implemnetation of the CSP Bottleneck with 3 convolutions.
+        Initialize the CSP Bottleneck with 3 convolutions.
 
         Args:
             c1 (int): Input channels.
@@ -329,23 +329,11 @@ class C3(nn.Module):
         self.cv1 = Conv(c1, c_, 1, 1)
         self.cv2 = Conv(c1, c_, 1, 1)
         self.cv3 = Conv(2 * c_, c2, 1)  # optional act=FReLU(c2)
-        self.m = nn.Sequential(*(Bottleneck(c_, c_, shortcut, g, k=((3, 3), (3, 3)), e=1.0) for _ in range(n)))
+        self.m = nn.Sequential(*(Bottleneck(c_, c_, shortcut, g, k=((1, 1), (3, 3)), e=1.0) for _ in range(n)))
 
     def forward(self, x):
         """Forward pass through the CSP bottleneck with 3 convolutions."""
-        y1 = self.cv1(x)
-        y2 = self.cv2(x)
-        y = torch.cat((self.m(y1), y2), 1)
-        return self.cv3(y)
-
-    def forward_split(self, x):
-        """Forward pass using split() instead of chunk()."""
-        y1 = self.cv1(x)
-        y2 = self.cv2(x)
-        y1_split, y2_split = y1.split(y1.shape[1] // 2, 1)  # Split along the channel dimension
-        y = torch.cat((self.m(y1_split), y2_split), 1)
-        return self.cv3(y)
-
+        return self.cv3(torch.cat((self.m(self.cv1(x)), self.cv2(x)), 1))
 
 
 class C3x(C3):
