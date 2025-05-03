@@ -1807,7 +1807,7 @@ class ABlock(nn.Module):
         x1 = x+ self.attn1(x)
         if self.area>1:
             x2 = x + self.attn2(x)
-            x1 = ((self.area*(x1**2) + (x2**2))/(self.area+1))**0.5
+            x1 = torch.sqrt((self.area * x1.pow(2) + x2.pow(2)) / (self.area + 1))
         
         x = x1 + self.mlp(x1)
         return x
