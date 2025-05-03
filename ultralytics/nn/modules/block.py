@@ -1777,7 +1777,7 @@ class ABlock(nn.Module):
         if area>1:
             self.attn2 = AAttn(dim, num_heads=num_heads, area=area)
         mlp_hidden_dim = int(dim * mlp_ratio)
-        self.mlp = nn.Sequential(Conv(dim, mlp_hidden_dim, 3), Conv(mlp_hidden_dim, dim, 3, act=False))
+        self.mlp = nn.Sequential(Conv(dim, mlp_hidden_dim, 1), Conv(mlp_hidden_dim, dim, 1, act=False))
         self.area = area
         
         self.apply(self._init_weights)
