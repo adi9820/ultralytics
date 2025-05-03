@@ -1760,7 +1760,7 @@ class ABlock(nn.Module):
         torch.Size([1, 256, 32, 32])
     """
 
-    def __init__(self, dim, num_heads, mlp_ratio=1.2, area=1):
+    def __init__(self, dim, num_heads, mlp_ratio=1.2, area=1, shortcut=True):
         """
         Initialize an Area-attention block module.
 
@@ -1772,11 +1772,14 @@ class ABlock(nn.Module):
         """
         super().__init__()
 
-        self.attn = AAttn(dim, num_heads=num_heads, area=area)
+        self.attn1 = AAttn(dim, num_heads=num_heads, area=area)
         mlp_hidden_dim = int(dim * mlp_ratio)
         self.mlp = nn.Sequential(Conv(dim, mlp_hidden_dim, 1), Conv(mlp_hidden_dim, dim, 1, act=False))
-
         self.apply(self._init_weights)
+
+        self.attn2 = Attention(dim, attn_ratio=0.5, num_heads=num_heads)
+        self.ffn = nn.Sequential(Conv(dim, dim * 2, 1), Conv(dim * 2, dim, 1, act=False))
+        self.add = shortcut
 
     def _init_weights(self, m):
         """
@@ -1800,8 +1803,16 @@ class ABlock(nn.Module):
         Returns:
             (torch.Tensor): Output tensor after area-attention and feed-forward processing.
         """
-        x = x + self.attn(x)
-        return x + self.mlp(x)
+        x1=x
+        x1 = x1 + self.attn1(x1)
+        x1 = x1 + self.mlp(x1)
+
+        x2=x
+        x2 = x2+ self.attn2(x2) if self.add else self.attn(x2)
+        x2 = x2 + self.ffn(x) if self.add else self.ffn(x2)
+
+        x=(x1+x2)/2
+        return x
 
 
 class A2C2f(nn.Module):
