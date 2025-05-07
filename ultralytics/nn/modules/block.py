@@ -1667,9 +1667,9 @@ class AAttn(nn.Module):
         all_head_dim = head_dim * self.num_heads
 
         # Use separate Conv layers for q, k, and v
-        self.q = Conv(dim, all_head_dim, 1, act=False)
-        self.k = Conv(dim, all_head_dim, 1, act=False)
-        self.v = Conv(dim, all_head_dim, 1, act=False)
+        self.q = Conv(dim, all_head_dim, kernel_size=1, act=False)              # 1x1
+        self.k = Conv(dim, all_head_dim, kernel_size=3, padding=1, act=False)   # 3x3
+        self.v = Conv(dim, all_head_dim, kernel_size=5, padding=2, act=False)   # 5x5
 
         self.proj = Conv(all_head_dim, dim, 1, act=False)
         self.pe = Conv(all_head_dim, dim, 7, 1, 3, g=dim, act=False)
