@@ -1651,89 +1651,52 @@ class TorchVision(nn.Module):
 
 
 class AAttn(nn.Module):
-    """
-    Area-attention module for YOLO models, providing efficient attention mechanisms.
-
-    This module implements an area-based attention mechanism that processes input features in a spatially-aware manner,
-    making it particularly effective for object detection tasks.
-
-    Attributes:
-        area (int): Number of areas the feature map is divided.
-        num_heads (int): Number of heads into which the attention mechanism is divided.
-        head_dim (int): Dimension of each attention head.
-        qkv (Conv): Convolution layer for computing query, key and value tensors.
-        proj (Conv): Projection convolution layer.
-        pe (Conv): Position encoding convolution layer.
-
-    Methods:
-        forward: Applies area-attention to input tensor.
-
-    Examples:
-        >>> attn = AAttn(dim=256, num_heads=8, area=4)
-        >>> x = torch.randn(1, 256, 32, 32)
-        >>> output = attn(x)
-        >>> print(output.shape)
-        torch.Size([1, 256, 32, 32])
-    """
-
     def __init__(self, dim, num_heads, area=1):
-        """
-        Initialize an Area-attention module for YOLO models.
-
-        Args:
-            dim (int): Number of hidden channels.
-            num_heads (int): Number of heads into which the attention mechanism is divided.
-            area (int): Number of areas the feature map is divided, default is 1.
-        """
         super().__init__()
         self.area = area
-
         self.num_heads = num_heads
-        self.head_dim = head_dim = dim // num_heads
-        all_head_dim = head_dim * self.num_heads
+        self.head_dim = dim // num_heads
+        assert dim % num_heads == 0, "dim must be divisible by num_heads"
 
-        self.qkv = Conv(dim, all_head_dim * 3, 1, act=False)
-        self.proj = Conv(all_head_dim, dim, 1, act=False)
-        self.pe = Conv(all_head_dim, dim, 7, 1, 3, g=dim, act=False)
+        # Separate Q, K, V projections
+        self.q_proj = Conv(dim, dim, 1, act=False)
+        self.k_proj = Conv(dim, dim, 1, act=False)
+        self.v_proj = Conv(dim, dim, 1, act=False)
+
+        self.out_proj = Conv(dim, dim, 1, act=False)
+        self.pe = Conv(dim, dim, 7, 1, 3, g=dim, act=False)  # depthwise positional encoding
 
     def forward(self, x):
-        """
-        Process the input tensor through the area-attention.
-
-        Args:
-            x (torch.Tensor): Input tensor.
-
-        Returns:
-            (torch.Tensor): Output tensor after area-attention.
-        """
         B, C, H, W = x.shape
         N = H * W
 
-        qkv = self.qkv(x).flatten(2).transpose(1, 2)
+        # Project Q, K, V
+        q = self.q_proj(x).reshape(B, self.num_heads, self.head_dim, N)
+        k = self.k_proj(x).reshape(B, self.num_heads, self.head_dim, N)
+        v = self.v_proj(x).reshape(B, self.num_heads, self.head_dim, N)
+
         if self.area > 1:
-            qkv = qkv.reshape(B * self.area, N // self.area, C * 3)
-            B, N, _ = qkv.shape
-        q, k, v = (
-            qkv.view(B, N, self.num_heads, self.head_dim * 3)
-            .permute(0, 2, 3, 1)
-            .split([self.head_dim, self.head_dim, self.head_dim], dim=2)
-        )
-        attn = (q.transpose(-2, -1) @ k) * (self.head_dim**-0.5)
+            q = q.reshape(B * self.area, self.num_heads, self.head_dim, N // self.area)
+            k = k.reshape(B * self.area, self.num_heads, self.head_dim, N // self.area)
+            v = v.reshape(B * self.area, self.num_heads, self.head_dim, N // self.area)
+            B = B * self.area
+            N = N // self.area
+
+        # Scaled dot-product attention
+        attn = torch.matmul(q.transpose(-2, -1), k) / (self.head_dim ** 0.5)  # [B, num_heads, N, N]
         attn = attn.softmax(dim=-1)
-        x = v @ attn.transpose(-2, -1)
-        x = x.permute(0, 3, 1, 2)
-        v = v.permute(0, 3, 1, 2)
+
+        out = torch.matmul(attn, v.transpose(-2, -1))  # [B, num_heads, N, head_dim]
+        out = out.transpose(-2, -1).reshape(B, self.num_heads * self.head_dim, H, W)
 
         if self.area > 1:
-            x = x.reshape(B // self.area, N * self.area, C)
-            v = v.reshape(B // self.area, N * self.area, C)
-            B, N, _ = x.shape
+            out = out.reshape(B // self.area, self.area, C, H, W).mean(dim=1)
+            v = v.reshape(B // self.area, self.area, self.head_dim * self.num_heads, H, W).mean(dim=1)
+        else:
+            v = v.reshape(B, C, H, W)
 
-        x = x.reshape(B, H, W, C).permute(0, 3, 1, 2).contiguous()
-        v = v.reshape(B, H, W, C).permute(0, 3, 1, 2).contiguous()
-
-        x = x + self.pe(v)
-        return self.proj(x)
+        out = out + self.pe(v)
+        return self.out_proj(out)
 
 
 class ABlock(nn.Module):
