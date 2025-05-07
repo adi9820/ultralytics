@@ -1652,51 +1652,65 @@ class TorchVision(nn.Module):
 
 class AAttn(nn.Module):
     def __init__(self, dim, num_heads, area=1):
+        """
+        Initialize an Area-attention module for YOLO models.
+
+        Args:
+            dim (int): Number of hidden channels.
+            num_heads (int): Number of attention heads.
+            area (int): Number of areas the feature map is divided into (default: 1).
+        """
         super().__init__()
         self.area = area
         self.num_heads = num_heads
-        self.head_dim = dim // num_heads
-        assert dim % num_heads == 0, "dim must be divisible by num_heads"
+        self.head_dim = head_dim = dim // num_heads
+        all_head_dim = head_dim * self.num_heads
 
-        # Separate Q, K, V projections
-        self.q_proj = Conv(dim, dim, 1, act=False)
-        self.k_proj = Conv(dim, dim, 1, act=False)
-        self.v_proj = Conv(dim, dim, 1, act=False)
+        # Use separate Conv layers for q, k, and v
+        self.q = Conv(dim, all_head_dim, 1, act=False)
+        self.k = Conv(dim, all_head_dim, 1, act=False)
+        self.v = Conv(dim, all_head_dim, 1, act=False)
 
-        self.out_proj = Conv(dim, dim, 1, act=False)
-        self.pe = Conv(dim, dim, 7, 1, 3, g=dim, act=False)  # depthwise positional encoding
+        self.proj = Conv(all_head_dim, dim, 1, act=False)
+        self.pe = Conv(all_head_dim, dim, 7, 1, 3, g=dim, act=False)
 
     def forward(self, x):
         B, C, H, W = x.shape
         N = H * W
 
-        # Project Q, K, V
-        q = self.q_proj(x).reshape(B, self.num_heads, self.head_dim, N)
-        k = self.k_proj(x).reshape(B, self.num_heads, self.head_dim, N)
-        v = self.v_proj(x).reshape(B, self.num_heads, self.head_dim, N)
+        # Compute q, k, v separately
+        q = self.q(x).flatten(2).transpose(1, 2)  # (B, N, all_head_dim)
+        k = self.k(x).flatten(2).transpose(1, 2)
+        v = self.v(x).flatten(2).transpose(1, 2)
 
         if self.area > 1:
-            q = q.reshape(B * self.area, self.num_heads, self.head_dim, N // self.area)
-            k = k.reshape(B * self.area, self.num_heads, self.head_dim, N // self.area)
-            v = v.reshape(B * self.area, self.num_heads, self.head_dim, N // self.area)
-            B = B * self.area
-            N = N // self.area
+            q = q.reshape(B * self.area, N // self.area, C)
+            k = k.reshape(B * self.area, N // self.area, C)
+            v = v.reshape(B * self.area, N // self.area, C)
+            B, N, _ = q.shape
 
-        # Scaled dot-product attention
-        attn = torch.matmul(q.transpose(-2, -1), k) / (self.head_dim ** 0.5)  # [B, num_heads, N, N]
+        # Reshape and split into heads
+        q = q.view(B, N, self.num_heads, self.head_dim).permute(0, 2, 3, 1)  # (B, num_heads, head_dim, N)
+        k = k.view(B, N, self.num_heads, self.head_dim).permute(0, 2, 3, 1)
+        v = v.view(B, N, self.num_heads, self.head_dim).permute(0, 2, 3, 1)
+
+        attn = (q.transpose(-2, -1) @ k) * (self.head_dim**-0.5)
         attn = attn.softmax(dim=-1)
+        x = v @ attn.transpose(-2, -1)  # (B, num_heads, head_dim, N)
+        x = x.permute(0, 3, 1, 2)  # (B, N, num_heads, head_dim)
 
-        out = torch.matmul(attn, v.transpose(-2, -1))  # [B, num_heads, N, head_dim]
-        out = out.transpose(-2, -1).reshape(B, self.num_heads * self.head_dim, H, W)
+        v = v.permute(0, 3, 1, 2)  # (B, N, num_heads, head_dim)
 
         if self.area > 1:
-            out = out.reshape(B // self.area, self.area, C, H, W).mean(dim=1)
-            v = v.reshape(B // self.area, self.area, self.head_dim * self.num_heads, H, W).mean(dim=1)
-        else:
-            v = v.reshape(B, C, H, W)
+            x = x.reshape(B // self.area, N * self.area, self.num_heads * self.head_dim)
+            v = v.reshape(B // self.area, N * self.area, self.num_heads * self.head_dim)
+            B, N, _ = x.shape
 
-        out = out + self.pe(v)
-        return self.out_proj(out)
+        x = x.reshape(B, H, W, self.num_heads * self.head_dim).permute(0, 3, 1, 2).contiguous()
+        v = v.reshape(B, H, W, self.num_heads * self.head_dim).permute(0, 3, 1, 2).contiguous()
+
+        x = x + self.pe(v)
+        return self.proj(x)
 
 
 class ABlock(nn.Module):
