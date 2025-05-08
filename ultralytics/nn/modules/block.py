@@ -1653,35 +1653,38 @@ class TorchVision(nn.Module):
 class AAttn(nn.Module):
     def __init__(self, dim, num_heads, area=1):
         """
-        Initialize an Area-attention module for YOLO models.
+        Cross-Attention module with area-based multi-head attention.
 
         Args:
             dim (int): Number of hidden channels.
             num_heads (int): Number of attention heads.
-            area (int): Number of areas the feature map is divided into (default: 1).
+            area (int): Number of spatial divisions for area-wise attention.
         """
         super().__init__()
         self.area = area
         self.num_heads = num_heads
         self.head_dim = head_dim = dim // num_heads
-        all_head_dim = head_dim * self.num_heads
+        all_head_dim = head_dim * num_heads
+        
+        self.q = Conv(dim, all_head_dim, k=1, act=False) # Q=1 ensures spatial sharpness → good for localizing small objects
+        self.k = Conv(dim, all_head_dim, k=3, p=1, act=False) # K=3 enables pattern-based matching → useful in dense or noisy contexts
+        self.v = Conv(dim, all_head_dim, k=5, p=2, act=False) # V=5 provides rich, broad features → helps retain object semantics even if partially visible
 
-        # Use separate Conv layers for q, k, and v
-        self.q = Conv(dim, all_head_dim, k=1, act=False)              # 1x1
-        self.k = Conv(dim, all_head_dim, k=3, p=1, act=False)   # 3x3
-        self.v = Conv(dim, all_head_dim, k=5, p=2, act=False)   # 5x5
+        self.proj = Conv(all_head_dim, dim, 1, act=False) # To restore feature dimension
+        self.pe = Conv(all_head_dim, dim, 7, 1, 3, g=dim, act=False) # Positional Encoding for spatially awareness
 
-        self.proj = Conv(all_head_dim, dim, 1, act=False)
-        self.pe = Conv(all_head_dim, dim, 7, 1, 3, g=dim, act=False)
-
-    def forward(self, x):
+    def forward(self, x, context):
+        """
+        x: Tensor of shape (B, C, H, W) - query source
+        context: Tensor of shape (B, C, H, W) - key/value source
+        """
         B, C, H, W = x.shape
         N = H * W
 
-        # Compute q, k, v separately
-        q = self.q(x).flatten(2).transpose(1, 2)  # (B, N, all_head_dim)
-        k = self.k(x).flatten(2).transpose(1, 2)
-        v = self.v(x).flatten(2).transpose(1, 2)
+        # Compute q from x, k & v from context
+        q = self.q(x).flatten(2).transpose(1, 2)       # (B, N, all_head_dim)
+        k = self.k(context).flatten(2).transpose(1, 2)
+        v = self.v(context).flatten(2).transpose(1, 2)
 
         if self.area > 1:
             q = q.reshape(B * self.area, N // self.area, C)
@@ -1689,12 +1692,12 @@ class AAttn(nn.Module):
             v = v.reshape(B * self.area, N // self.area, C)
             B, N, _ = q.shape
 
-        # Reshape and split into heads
+        # Split into heads
         q = q.view(B, N, self.num_heads, self.head_dim).permute(0, 2, 3, 1)  # (B, num_heads, head_dim, N)
         k = k.view(B, N, self.num_heads, self.head_dim).permute(0, 2, 3, 1)
         v = v.view(B, N, self.num_heads, self.head_dim).permute(0, 2, 3, 1)
 
-        attn = (q.transpose(-2, -1) @ k) * (self.head_dim**-0.5)
+        attn = (q.transpose(-2, -1) @ k) * (self.head_dim ** -0.5)
         attn = attn.softmax(dim=-1)
         x = v @ attn.transpose(-2, -1)  # (B, num_heads, head_dim, N)
         x = x.permute(0, 3, 1, 2)  # (B, N, num_heads, head_dim)
@@ -1711,7 +1714,6 @@ class AAttn(nn.Module):
 
         x = x + self.pe(v)
         return self.proj(x)
-
 
 class ABlock(nn.Module):
     """
@@ -1767,66 +1769,21 @@ class ABlock(nn.Module):
             if m.bias is not None:
                 nn.init.constant_(m.bias, 0)
 
-    def forward(self, x):
-        """
-        Forward pass through ABlock.
-
-        Args:
-            x (torch.Tensor): Input tensor.
-
-        Returns:
-            (torch.Tensor): Output tensor after area-attention and feed-forward processing.
-        """
-        x = x + self.attn(x)
+    def forward(self, x, context):
+        x = x + self.attn(x, context)
         return x + self.mlp(x)
 
 
 class A2C2f(nn.Module):
-    """
-    Area-Attention C2f module for enhanced feature extraction with area-based attention mechanisms.
-
-    This module extends the C2f architecture by incorporating area-attention and ABlock layers for improved feature
-    processing. It supports both area-attention and standard convolution modes.
-
-    Attributes:
-        cv1 (Conv): Initial 1x1 convolution layer that reduces input channels to hidden channels.
-        cv2 (Conv): Final 1x1 convolution layer that processes concatenated features.
-        gamma (nn.Parameter | None): Learnable parameter for residual scaling when using area attention.
-        m (nn.ModuleList): List of either ABlock or C3k modules for feature processing.
-
-    Methods:
-        forward: Processes input through area-attention or standard convolution pathway.
-
-    Examples:
-        >>> m = A2C2f(512, 512, n=1, a2=True, area=1)
-        >>> x = torch.randn(1, 512, 32, 32)
-        >>> output = m(x)
-        >>> print(output.shape)
-        torch.Size([1, 512, 32, 32])
-    """
-
     def __init__(self, c1, c2, n=1, a2=True, area=1, residual=False, mlp_ratio=2.0, e=0.5, g=1, shortcut=True):
-        """
-        Initialize Area-Attention C2f module.
-
-        Args:
-            c1 (int): Number of input channels.
-            c2 (int): Number of output channels.
-            n (int): Number of ABlock or C3k modules to stack.
-            a2 (bool): Whether to use area attention blocks. If False, uses C3k blocks instead.
-            area (int): Number of areas the feature map is divided.
-            residual (bool): Whether to use residual connections with learnable gamma parameter.
-            mlp_ratio (float): Expansion ratio for MLP hidden dimension.
-            e (float): Channel expansion ratio for hidden channels.
-            g (int): Number of groups for grouped convolutions.
-            shortcut (bool): Whether to use shortcut connections in C3k blocks.
-        """
         super().__init__()
         c_ = int(c2 * e)  # hidden channels
         assert c_ % 32 == 0, "Dimension of ABlock be a multiple of 32."
 
-        self.cv1 = Conv(c1, c_, 1, 1)
-        self.cv2 = Conv((1 + n) * c_, c2, 1)
+        # Three convolution layers
+        self.cv1 = Conv(c1, c_, 1, 1)  # First convolution for context
+        self.cv2 = Conv(c_, c_, 3, 1)  # Second convolution for feature extraction
+        self.cv3 = Conv(c_, c_, 1, 1)  # Third convolution for refinement
 
         self.gamma = nn.Parameter(0.01 * torch.ones(c2), requires_grad=True) if a2 and residual else None
         self.m = nn.ModuleList(
@@ -1836,23 +1793,27 @@ class A2C2f(nn.Module):
             for _ in range(n)
         )
 
-    def forward(self, x):
-        """
-        Forward pass through A2C2f layer.
+    def forward(self, x, context=None):
+        # Apply the convolution layers
+        context_features = self.cv1(x)  # Get context from the first convolution
+        y = [self.cv2(context_features)]  # Use the second convolution for main feature map
 
-        Args:
-            x (torch.Tensor): Input tensor.
+        # Process through ABlocks or C3k
+        for m in self.m:
+            if isinstance(m, nn.Sequential):  # Sequential of ABlocks
+                out = y[-1]
+                for block in m:
+                    out = block(out, context=context_features)  # Pass context to ABlock
+                y.append(out)
+            else:
+                y.append(m(y[-1]))  # Process through fallback layers like C3k
 
-        Returns:
-            (torch.Tensor): Output tensor after processing.
-        """
-        y = [self.cv1(x)]
-        y.extend(m(y[-1]) for m in self.m)
-        y = self.cv2(torch.cat(y, 1))
+        # Concatenate all outputs
+        y = self.cv3(torch.cat(y, 1))  # Refine the output using the third convolution
         if self.gamma is not None:
             return x + self.gamma.view(-1, len(self.gamma), 1, 1) * y
         return y
-
+        
 
 class SwiGLUFFN(nn.Module):
     """SwiGLU Feed-Forward Network for transformer-based architectures."""
