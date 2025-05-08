@@ -1788,7 +1788,7 @@ class A2C2f(nn.Module):
         
         self.a2 = a2
         
-        self.cv1 = Conv(c1, c_, 3, 1, 1)  # First convolution for context
+        self.cv1 = Conv(c1, c_, 1, 1)  # First convolution for context
         self.cv2 = Conv(c_, c_, 1, 1)  # Second convolution for feature extraction
         self.cv3 = Conv(c_ * (n + 1), c2, 1, 1)  # Third convolution for refinement
 
