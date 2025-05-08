@@ -1774,6 +1774,11 @@ class ABlock(nn.Module):
         x = x + self.attn(x, context)
         return x + self.mlp(x)
 
+class ContextSequential(nn.Sequential):
+    def forward(self, x, context):
+        for module in self:
+            x = module(x, context=context)  # forward context to each ABlock
+        return x
 
 class A2C2f(nn.Module):
     def __init__(self, c1, c2, n=1, a2=True, area=1, residual=False, mlp_ratio=2.0, e=0.5, g=1, shortcut=True):
@@ -1781,15 +1786,16 @@ class A2C2f(nn.Module):
         c_ = int(c2 * e)  # hidden channels
         assert c_ % 32 == 0, "Dimension of ABlock be a multiple of 32."
         
+        self.a2 = a2
+        
         self.cv1 = Conv(c1, c_, 1, 1)  # First convolution for context
         self.cv2 = Conv(c_, c_, 3, 1)  # Second convolution for feature extraction
         self.cv3 = Conv(c_ * (n + 1), c2, 1, 1)  # Third convolution for refinement
 
         self.gamma = nn.Parameter(0.01 * torch.ones(c2), requires_grad=True) if a2 and residual else None
         self.m = nn.ModuleList(
-            nn.Sequential(*(ABlock(c_, c_ // 32, mlp_ratio, area) for _ in range(2)))
-            if a2
-            else C3k(c_, c_, 2, shortcut, g)
+            ContextSequential(*(ABlock(c_, c_ // 32, mlp_ratio, area) for _ in range(2)))
+            if a2 else C3k(c_, c_, 2, shortcut, g)
             for _ in range(n)
         )
 
@@ -1798,15 +1804,8 @@ class A2C2f(nn.Module):
         context_features = self.cv1(x)  # Get context from the first convolution
         y = [self.cv2(context_features)]  # Use the second convolution for main feature map
         
-        for m in self.m:
-            if isinstance(m, nn.Sequential):  # Sequential of ABlocks
-                out = y[-1]
-                for block in m:
-                    out = block(out, context=context_features)  # Pass context to ABlock
-                y.append(out)
-            else:
-                y.append(m(y[-1]))  # Process through fallback layers like C3k
-
+        y.extend(m(y[-1], context=context_features) if self.a2 else m(y[-1]) for m in self.m) 
+        
         # Concatenate all outputs
         y = self.cv3(torch.cat(y, 1))  # Refine the output using the third convolution
         
