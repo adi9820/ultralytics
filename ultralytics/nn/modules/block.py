@@ -1650,6 +1650,7 @@ class TorchVision(nn.Module):
         return y
 
 
+
 class AAttn(nn.Module):
     def __init__(self, dim, num_heads, area=1):
         """
@@ -1779,11 +1780,10 @@ class A2C2f(nn.Module):
         super().__init__()
         c_ = int(c2 * e)  # hidden channels
         assert c_ % 32 == 0, "Dimension of ABlock be a multiple of 32."
-
-        # Three convolution layers
+        
         self.cv1 = Conv(c1, c_, 1, 1)  # First convolution for context
         self.cv2 = Conv(c_, c_, 3, 1)  # Second convolution for feature extraction
-        self.cv3 = Conv(c_, c_, 1, 1)  # Third convolution for refinement
+        self.cv3 = Conv(c_ * (n + 1), c2, 1, 1)  # Third convolution for refinement
 
         self.gamma = nn.Parameter(0.01 * torch.ones(c2), requires_grad=True) if a2 and residual else None
         self.m = nn.ModuleList(
@@ -1797,8 +1797,7 @@ class A2C2f(nn.Module):
         # Apply the convolution layers
         context_features = self.cv1(x)  # Get context from the first convolution
         y = [self.cv2(context_features)]  # Use the second convolution for main feature map
-
-        # Process through ABlocks or C3k
+        
         for m in self.m:
             if isinstance(m, nn.Sequential):  # Sequential of ABlocks
                 out = y[-1]
@@ -1810,6 +1809,7 @@ class A2C2f(nn.Module):
 
         # Concatenate all outputs
         y = self.cv3(torch.cat(y, 1))  # Refine the output using the third convolution
+        
         if self.gamma is not None:
             return x + self.gamma.view(-1, len(self.gamma), 1, 1) * y
         return y
