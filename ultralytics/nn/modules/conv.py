@@ -34,6 +34,11 @@ def autopad(k, p=None, d=1):  # kernel, padding, dilation
     return p
 
 
+class CustomActivation(nn.Module):
+    def forward(self, x):
+        return ((x * math.sqrt(2)) / (1 + torch.exp(-x / math.sqrt(2))))
+
+
 class Conv(nn.Module):
     """
     Standard convolution module with batch normalization and activation.
@@ -45,11 +50,11 @@ class Conv(nn.Module):
         default_act (nn.Module): Default activation function (SiLU).
     """
 
-    default_act = nn.SiLU()  # default activation
+    default_act = nn.SiLU() # default activation
 
-    def __init__(self, c1, c2, k=1, s=1, p=None, g=1, d=1, act=True):
+    def __init__(self, c1, c2, k=1, s=1, p=None, use_cbam=False, g=1, d=1, act=True, cbam_kernel_size=7):
         """
-        Initialize Conv layer with given parameters.
+        Initialize Conv layer with optional CBAM.
 
         Args:
             c1 (int): Number of input channels.
@@ -60,15 +65,20 @@ class Conv(nn.Module):
             g (int): Groups.
             d (int): Dilation.
             act (bool | nn.Module): Activation function.
+            use_cbam (bool): Whether to apply CBAM after the convolution block.
+            cbam_kernel_size (int): Kernel size for spatial attention in CBAM.
         """
         super().__init__()
         self.conv = nn.Conv2d(c1, c2, k, s, autopad(k, p, d), groups=g, dilation=d, bias=False)
         self.bn = nn.BatchNorm2d(c2)
         self.act = self.default_act if act is True else act if isinstance(act, nn.Module) else nn.Identity()
+        self.use_cbam = use_cbam
+        if use_cbam:
+            self.cbam = CBAM(c2, cbam_kernel_size) 
 
     def forward(self, x):
         """
-        Apply convolution, batch normalization and activation to input tensor.
+        Apply convolution, batch norm, activation, and optional CBAM.
 
         Args:
             x (torch.Tensor): Input tensor.
@@ -76,11 +86,14 @@ class Conv(nn.Module):
         Returns:
             (torch.Tensor): Output tensor.
         """
-        return self.act(self.bn(self.conv(x)))
+        x = self.act(self.bn(self.conv(x)))
+        if self.use_cbam:
+            x = self.cbam(x) 
+        return x
 
     def forward_fuse(self, x):
         """
-        Apply convolution and activation without batch normalization.
+        Apply convolution and activation without batch norm, with optional CBAM.
 
         Args:
             x (torch.Tensor): Input tensor.
@@ -88,7 +101,10 @@ class Conv(nn.Module):
         Returns:
             (torch.Tensor): Output tensor.
         """
-        return self.act(self.conv(x))
+        x = self.act(self.conv(x))
+        if self.use_cbam:
+            x = self.cbam(x) 
+        return x
 
 
 class Conv2(Conv):
