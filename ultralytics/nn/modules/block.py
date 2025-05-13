@@ -1667,12 +1667,12 @@ class AAttn(nn.Module):
         self.head_dim = head_dim = dim // num_heads
         all_head_dim = head_dim * num_heads
         
-        self.q = Conv(dim, all_head_dim, k=1, act=False) # Q=1 ensures spatial sharpness → good for localizing small objects
-        self.k = Conv(dim, all_head_dim, k=3, p=1, act=False) # K=3 enables pattern-based matching → useful in dense or noisy contexts
-        self.v = Conv(dim, all_head_dim, k=5, p=2, act=False) # V=5 provides rich, broad features → helps retain object semantics even if partially visible
+        self.q = Conv(dim, all_head_dim, k=1, act=False, use_cbam=True) # Q=1 ensures spatial sharpness → good for localizing small objects
+        self.k = Conv(dim, all_head_dim, k=3, p=1, act=False, use_cbam=True) # K=3 enables pattern-based matching → useful in dense or noisy contexts
+        self.v = Conv(dim, all_head_dim, k=3, p=1, act=False, use_cbam=True) # V=3 provides rich, broad features → helps retain object semantics even if partially visible
 
-        self.proj = Conv(all_head_dim, dim, 1, act=False) # To restore feature dimension
-        self.pe = Conv(all_head_dim, dim, 7, 1, 3, g=dim, act=False) # Positional Encoding for spatially awareness
+        self.proj = Conv(all_head_dim, dim, 1, act=False, use_cbam=True) # To restore feature dimension
+        self.pe = Conv(all_head_dim, dim, 7, 1, 3, g=dim, act=False, use_cbam=True) # Positional Encoding for spatially awareness
 
     def forward(self, x, context):
         """
@@ -1788,9 +1788,9 @@ class A2C2f(nn.Module):
         
         self.a2 = a2
         
-        self.cv1 = Conv(c1, c_, 1, 1)  # First convolution for context
-        self.cv2 = Conv(c_, c_, 1, 1)  # Second convolution for feature extraction
-        self.cv3 = Conv(c_ * (n + 1), c2, 1, 1)  # Third convolution for refinement
+        self.cv1 = Conv(c1, c_, 1, 1, use_cbam=True)  # First convolution for context
+        self.cv2 = Conv(c_, c_, 1, 1, use_cbam=True)  # Second convolution for feature extraction
+        self.cv3 = Conv(c_ * (n + 1), c2, 1, 1, use_cbam=True)  # Third convolution for refinement
 
         self.gamma = nn.Parameter(0.01 * torch.ones(c2), requires_grad=True) if a2 and residual else None
         self.m = nn.ModuleList(
