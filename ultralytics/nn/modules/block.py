@@ -1788,9 +1788,9 @@ class A2C2f(nn.Module):
         
         self.a2 = a2
         
-        self.cv1 = Conv(c1, c_, 1, 1, use_cbam=True)  # First convolution for context
-        self.cv2 = Conv(c_, c_, 1, 1, use_cbam=True)  # Second convolution for feature extraction
-        self.cv3 = Conv(c_ * (n + 1), c2, 1, 1, use_cbam=True)  # Third convolution for refinement
+        self.cv1 = Conv(c1, c_, 1, 1)  # First convolution for context
+        self.cv2 = Conv(c_, c_, 1, 1)  # Second convolution for feature extraction
+        self.cv3 = Conv(c_ * (n + 1), c2, 5, 1, 9)  # Third convolution for refinement
 
         self.gamma = nn.Parameter(0.01 * torch.ones(c2), requires_grad=True) if a2 and residual else None
         self.m = nn.ModuleList(
