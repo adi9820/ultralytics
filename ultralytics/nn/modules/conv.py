@@ -244,59 +244,20 @@ class DWConvTranspose2d(nn.ConvTranspose2d):
 
 
 class ConvTranspose(nn.Module):
-    """
-    Convolution transpose module with optional batch normalization and activation.
+    default_act = nn.SiLU()
 
-    Attributes:
-        conv_transpose (nn.ConvTranspose2d): Transposed convolution layer.
-        bn (nn.BatchNorm2d | nn.Identity): Batch normalization layer.
-        act (nn.Module): Activation function layer.
-        default_act (nn.Module): Default activation function (SiLU).
-    """
-
-    default_act = nn.SiLU()  # default activation
-
-    def __init__(self, c1, c2, k=2, s=2, p=0, bn=True, act=True):
-        """
-        Initialize ConvTranspose layer with given parameters.
-
-        Args:
-            c1 (int): Number of input channels.
-            c2 (int): Number of output channels.
-            k (int): Kernel size.
-            s (int): Stride.
-            p (int): Padding.
-            bn (bool): Use batch normalization.
-            act (bool | nn.Module): Activation function.
-        """
+    def __init__(self, c1, c2, k=2, s=2, p=0, output_padding=0, bn=True, act=True):
         super().__init__()
-        self.conv_transpose = nn.ConvTranspose2d(c1, c2, k, s, p, bias=not bn)
+        self.conv_transpose = nn.ConvTranspose2d(c1, c2, k, s, p, output_padding=output_padding, bias=not bn)
         self.bn = nn.BatchNorm2d(c2) if bn else nn.Identity()
         self.act = self.default_act if act is True else act if isinstance(act, nn.Module) else nn.Identity()
 
     def forward(self, x):
-        """
-        Apply transposed convolution, batch normalization and activation to input.
-
-        Args:
-            x (torch.Tensor): Input tensor.
-
-        Returns:
-            (torch.Tensor): Output tensor.
-        """
         return self.act(self.bn(self.conv_transpose(x)))
 
     def forward_fuse(self, x):
-        """
-        Apply activation and convolution transpose operation to input.
-
-        Args:
-            x (torch.Tensor): Input tensor.
-
-        Returns:
-            (torch.Tensor): Output tensor.
-        """
         return self.act(self.conv_transpose(x))
+
 
 
 class Focus(nn.Module):
