@@ -7,7 +7,7 @@ import torch.nn.functional as F
 
 from ultralytics.utils.torch_utils import fuse_conv_and_bn
 
-from .conv import Conv, DWConv, GhostConv, LightConv, RepConv, autopad
+from .conv import Conv, DWConv, GhostConv, LightConv, RepConv, autopad, ConvTranspose 
 from .transformer import TransformerBlock
 
 __all__ = (
@@ -1788,9 +1788,10 @@ class A2C2f(nn.Module):
         
         self.a2 = a2
         
-        self.cv1 = Conv(c1, c_, 1, 1)  # First convolution for context
-        self.cv2 = Conv(c_, c_, 1, 1)  # Second convolution for feature extraction
-        self.cv3 = Conv(c_ * (n + 1), c2, 5, 1, 9)  # Third convolution for refinement
+        self.cv1 = Conv(c1, c_, k=3, s=1, p=1, d=1)                        # Keeps size (H x W)
+        self.cv2 = ConvTranspose(c_, c_, k=3, s=1, p=1) # Keeps size (H x W)
+        self.cv3 = Conv(c_ * (n + 1), c2, k=3, s=1, p=1)                  # Keeps size (H x W)
+                   
 
         self.gamma = nn.Parameter(0.01 * torch.ones(c2), requires_grad=True) if a2 and residual else None
         self.m = nn.ModuleList(
