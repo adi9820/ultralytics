@@ -1788,7 +1788,7 @@ class A2C2f(nn.Module):
         
         self.a2 = a2
         
-        self.cv1 = Conv(c1, c_, k=3, s=1, p=1, d=1)                        # Keeps size (H x W)
+        self.cv1 = Conv(c1, c_, k=3, s=1, p=1)                        # Keeps size (H x W)
         self.cv2 = ConvTranspose(c_, c_, k=3, s=1, p=1) # Keeps size (H x W)
         self.cv3 = Conv(c_ * (n + 1), c2, k=3, s=1, p=1)                  # Keeps size (H x W)
                    
