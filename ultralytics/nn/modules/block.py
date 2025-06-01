@@ -12,6 +12,9 @@ from ultralytics.utils.torch_utils import fuse_conv_and_bn
 from .conv import Conv, DWConv, GhostConv, LightConv, RepConv, autopad
 from .transformer import TransformerBlock
 
+import math
+
+
 __all__ = (
     "DFL",
     "HGBlock",
@@ -1686,6 +1689,86 @@ class TorchVision(nn.Module):
         return y
 
 
+def precompute_freqs_cis(dim, seqlen, base=10000.0):
+    freqs = 1.0 / (base ** (torch.arange(0, dim, 2, dtype=torch.float32) / dim))
+    t = torch.arange(seqlen, dtype=torch.float32)
+    freqs = torch.outer(t, freqs)
+    freqs_cis = torch.polar(torch.ones_like(freqs), freqs)  # (seqlen, dim//2)
+    return freqs_cis  # (seqlen, dim//2)
+
+def apply_rotary_emb(x: torch.Tensor, freqs_cis: torch.Tensor) -> torch.Tensor:
+    x = torch.view_as_complex(x.float().reshape(*x.shape[:-1], -1, 2))
+    freqs_cis = freqs_cis.to(x.device).unsqueeze(0).unsqueeze(0)
+    x = x * freqs_cis
+    x = torch.view_as_real(x).flatten(-2)
+    return x
+
+class AreaRoPEAttention(nn.Module):
+    def __init__(self, dim: int, num_heads: int, area: int = 1):
+        super().__init__()
+        self.area = area
+        self.num_heads = num_heads
+        self.head_dim = dim // num_heads
+        all_head_dim = self.head_dim * self.num_heads
+
+        self.qkv = Conv(dim, all_head_dim * 3, 1, act=False)
+        self.proj = Conv(all_head_dim, dim, 1, act=False)
+        self.pe = Conv(all_head_dim, dim, 7, 1, 3, g=dim, act=False)
+
+    def forward(self, x: torch.Tensor, freqs_cis: torch.Tensor) -> torch.Tensor:
+        """
+        Args:
+            x (torch.Tensor): Input tensor of shape (B, C, H, W)
+            freqs_cis (torch.Tensor): Precomputed RoPE embeddings (seq_len, head_dim/2) as complex numbers
+    
+        Returns:
+            torch.Tensor: Output tensor after area-based RoPE attention
+        """
+        B, C, H, W = x.shape
+        N = H * W
+        # Compute qkv projections
+        qkv = self.qkv(x).flatten(2).transpose(1, 2)  # shape: (B, N, 3 * all_head_dim)
+        if self.area > 1:
+            qkv = qkv.reshape(B * self.area, N // self.area, C * 3)
+            B_, N, _ = qkv.shape
+        else:
+            B_ = B
+        # Reshape and split qkv into q,k,v
+        # qkv: (B_, N, num_heads, head_dim * 3) -> permute to (B_, num_heads, head_dim * 3, N)
+        qkv = qkv.view(B_, N, self.num_heads, self.head_dim * 3).permute(0, 2, 3, 1)
+        q, k, v = torch.split(qkv, self.head_dim, dim=2)  # each shape: (B_, num_heads, head_dim, N)
+        # RoPE expects last dim to be even and split into pairs of 2 (for complex numbers)
+        # Transpose q,k to (B_, num_heads, N, head_dim) to match freqs_cis shape (N, head_dim/2)
+        q = q.permute(0, 1, 3, 2)  # (B_, num_heads, N, head_dim)
+        k = k.permute(0, 1, 3, 2)
+        # Apply rotary embeddings (complex multiplication)
+        q = apply_rotary_emb(q, freqs_cis)  # output shape same as input (B_, num_heads, N, head_dim)
+        k = apply_rotary_emb(k, freqs_cis)
+        # Transpose back to (B_, num_heads, head_dim, N)
+        q = q.permute(0, 1, 3, 2)
+        k = k.permute(0, 1, 3, 2)
+        # Attention: attn = q^T * k
+        attn = torch.matmul(q.transpose(-2, -1), k) * (self.head_dim ** -0.5)
+        attn = attn.softmax(dim=-1)
+        # Attention output: v @ attn^T
+        x = torch.matmul(v, attn.transpose(-2, -1))  # (B_, num_heads, head_dim, N)
+        # Rearrange to (B_, N, num_heads * head_dim)
+        x = x.permute(0, 3, 1, 2).reshape(B_, N, -1)
+        # If area > 1, reshape back
+        if self.area > 1:
+            x = x.reshape(B // self.area, N * self.area, C)
+            B_, N, _ = x.shape
+        # Reshape to (B_, H, W, C) then permute to (B_, C, H, W)
+        x = x.reshape(B_, H, W, C).permute(0, 3, 1, 2).contiguous()
+        # Also reshape v to (B_, C, H, W) to apply positional encoding convolution
+        v = v.permute(0, 3, 1, 2).reshape(B_, C, H, W).contiguous()
+        # Add positional encoding conv output
+        x = x + self.pe(v)
+        # Final projection conv
+        return self.proj(x)
+
+
+
 class AAttn(nn.Module):
     """
     Area-attention module for YOLO models, providing efficient attention mechanisms.
@@ -1808,7 +1891,7 @@ class ABlock(nn.Module):
         """
         super().__init__()
 
-        self.attn = AAttn(dim, num_heads=num_heads, area=area)
+        self.attn = AreaRoPEAttention(dim, num_heads=num_heads, area=area)
         mlp_hidden_dim = int(dim * mlp_ratio)
         self.mlp = nn.Sequential(Conv(dim, mlp_hidden_dim, 1), Conv(mlp_hidden_dim, dim, 1, act=False))
 
