@@ -13,7 +13,7 @@ from .conv import Conv, DWConv, GhostConv, LightConv, RepConv, autopad
 from .transformer import TransformerBlock
 
 import math
-
+from torch import Tensor
 
 __all__ = (
     "DFL",
@@ -1689,22 +1689,26 @@ class TorchVision(nn.Module):
         return y
 
 
-def precompute_freqs_cis(dim, seqlen, base=10000.0):
+
+def precompute_freqs_cis(dim: int, seqlen: int, base=10000.0) -> Tensor:
     freqs = 1.0 / (base ** (torch.arange(0, dim, 2, dtype=torch.float32) / dim))
     t = torch.arange(seqlen, dtype=torch.float32)
     freqs = torch.outer(t, freqs)
-    freqs_cis = torch.polar(torch.ones_like(freqs), freqs)  # (seqlen, dim//2)
-    return freqs_cis  # (seqlen, dim//2)
+    freqs_cis = torch.polar(torch.ones_like(freqs), freqs)  # shape: (seqlen, dim//2), complex numbers
+    return freqs_cis
 
-def apply_rotary_emb(x: torch.Tensor, freqs_cis: torch.Tensor) -> torch.Tensor:
-    x = torch.view_as_complex(x.float().reshape(*x.shape[:-1], -1, 2))
-    freqs_cis = freqs_cis.to(x.device).unsqueeze(0).unsqueeze(0)
-    x = x * freqs_cis
-    x = torch.view_as_real(x).flatten(-2)
-    return x
+
+def apply_rotary_emb(x: Tensor, freqs_cis: Tensor) -> Tensor:
+    # x: (..., head_dim), where head_dim is even, last dim split into pairs for complex
+    x_complex = torch.view_as_complex(x.float().reshape(*x.shape[:-1], -1, 2))
+    freqs_cis = freqs_cis.to(x.device).unsqueeze(0).unsqueeze(0)  # broadcast dims for batch & heads
+    x_rot = x_complex * freqs_cis
+    x_out = torch.view_as_real(x_rot).flatten(-2)
+    return x_out.type_as(x)
+
 
 class AreaRoPEAttention(nn.Module):
-    def __init__(self, dim: int, num_heads: int, area: int = 1):
+    def __init__(self, dim: int, num_heads: int, area: int = 1, max_seq_len: int = 1024):
         super().__init__()
         self.area = area
         self.num_heads = num_heads
@@ -1715,57 +1719,68 @@ class AreaRoPEAttention(nn.Module):
         self.proj = Conv(all_head_dim, dim, 1, act=False)
         self.pe = Conv(all_head_dim, dim, 7, 1, 3, g=dim, act=False)
 
-    def forward(self, x: torch.Tensor, freqs_cis: torch.Tensor) -> torch.Tensor:
-        """
-        Args:
-            x (torch.Tensor): Input tensor of shape (B, C, H, W)
-            freqs_cis (torch.Tensor): Precomputed RoPE embeddings (seq_len, head_dim/2) as complex numbers
-    
-        Returns:
-            torch.Tensor: Output tensor after area-based RoPE attention
-        """
+        # Precompute RoPE embeddings for max_seq_len and register as buffer (non-trainable)
+        freqs_cis = precompute_freqs_cis(self.head_dim, max_seq_len)
+        self.register_buffer('freqs_cis', freqs_cis, persistent=False)
+
+    def forward(self, x: Tensor, freqs_cis: Tensor = None) -> Tensor:
         B, C, H, W = x.shape
         N = H * W
+
+        if freqs_cis is None:
+            # Use precomputed buffer and slice for current seq length
+            freqs_cis = self.freqs_cis[:N].to(x.device)
+
         # Compute qkv projections
         qkv = self.qkv(x).flatten(2).transpose(1, 2)  # shape: (B, N, 3 * all_head_dim)
+
         if self.area > 1:
             qkv = qkv.reshape(B * self.area, N // self.area, C * 3)
             B_, N, _ = qkv.shape
         else:
             B_ = B
-        # Reshape and split qkv into q,k,v
-        # qkv: (B_, N, num_heads, head_dim * 3) -> permute to (B_, num_heads, head_dim * 3, N)
+
+        # Reshape and split qkv into q, k, v
         qkv = qkv.view(B_, N, self.num_heads, self.head_dim * 3).permute(0, 2, 3, 1)
-        q, k, v = torch.split(qkv, self.head_dim, dim=2)  # each shape: (B_, num_heads, head_dim, N)
-        # RoPE expects last dim to be even and split into pairs of 2 (for complex numbers)
-        # Transpose q,k to (B_, num_heads, N, head_dim) to match freqs_cis shape (N, head_dim/2)
-        q = q.permute(0, 1, 3, 2)  # (B_, num_heads, N, head_dim)
+        q, k, v = torch.split(qkv, self.head_dim, dim=2)  # each (B_, num_heads, head_dim, N)
+
+        # Transpose q,k to (B_, num_heads, N, head_dim) for RoPE
+        q = q.permute(0, 1, 3, 2)
         k = k.permute(0, 1, 3, 2)
-        # Apply rotary embeddings (complex multiplication)
-        q = apply_rotary_emb(q, freqs_cis)  # output shape same as input (B_, num_heads, N, head_dim)
+
+        # Apply rotary embeddings
+        q = apply_rotary_emb(q, freqs_cis)
         k = apply_rotary_emb(k, freqs_cis)
+
         # Transpose back to (B_, num_heads, head_dim, N)
         q = q.permute(0, 1, 3, 2)
         k = k.permute(0, 1, 3, 2)
-        # Attention: attn = q^T * k
+
+        # Compute attention weights
         attn = torch.matmul(q.transpose(-2, -1), k) * (self.head_dim ** -0.5)
         attn = attn.softmax(dim=-1)
-        # Attention output: v @ attn^T
-        x = torch.matmul(v, attn.transpose(-2, -1))  # (B_, num_heads, head_dim, N)
-        # Rearrange to (B_, N, num_heads * head_dim)
-        x = x.permute(0, 3, 1, 2).reshape(B_, N, -1)
-        # If area > 1, reshape back
+
+        # Attention output
+        x_out = torch.matmul(v, attn.transpose(-2, -1))  # (B_, num_heads, head_dim, N)
+
+        # Rearrange output to (B_, N, num_heads * head_dim)
+        x_out = x_out.permute(0, 3, 1, 2).reshape(B_, N, -1)
+
         if self.area > 1:
-            x = x.reshape(B // self.area, N * self.area, C)
-            B_, N, _ = x.shape
-        # Reshape to (B_, H, W, C) then permute to (B_, C, H, W)
-        x = x.reshape(B_, H, W, C).permute(0, 3, 1, 2).contiguous()
-        # Also reshape v to (B_, C, H, W) to apply positional encoding convolution
+            x_out = x_out.reshape(B // self.area, N * self.area, C)
+            B_, N, _ = x_out.shape
+
+        # Reshape to (B_, H, W, C) and permute to (B_, C, H, W)
+        x_out = x_out.reshape(B_, H, W, C).permute(0, 3, 1, 2).contiguous()
+
+        # Also reshape v to (B_, C, H, W) for positional encoding conv
         v = v.permute(0, 3, 1, 2).reshape(B_, C, H, W).contiguous()
-        # Add positional encoding conv output
-        x = x + self.pe(v)
+
+        # Add positional encoding convolution output
+        x_out = x_out + self.pe(v)
+
         # Final projection conv
-        return self.proj(x)
+        return self.proj(x_out)
 
 
 
