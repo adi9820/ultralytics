@@ -1689,72 +1689,83 @@ class TorchVision(nn.Module):
         return y
 
 
-
 class AreaRoPEAttention(nn.Module):
     def __init__(self, dim: int, num_heads: int, area: int = 1):
         super().__init__()
-        self.dim = dim
-        self.num_heads = num_heads
-        self.area = area  # can be used later for area-wise grouping
-        self.head_dim = dim // num_heads
-        assert self.head_dim * num_heads == dim, "dim must be divisible by num_heads"
+        self.area = area
 
-        # QKV projection as 1x1 conv to keep spatial structure (B,C,H,W)
-        self.qkv = nn.Conv2d(dim, dim * 3, kernel_size=1, bias=False)
-        self.proj = nn.Conv2d(dim, dim, kernel_size=1)
+        self.num_heads = num_heads
+        self.head_dim = dim // num_heads
+        self.scale = self.head_dim**-0.5
+
+        all_head_dim = self.head_dim * self.num_heads
+
+        self.qkv = Conv(dim, all_head_dim * 3, 1, act=False)
+        self.proj = Conv(all_head_dim, dim, 1, act=False)
+        self.pe = Conv(all_head_dim, dim, 7, 1, 3, g=dim, act=False)  # depthwise conv positional enhancement
+
+    def apply_rope(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        x: (B, num_heads, head_dim, N) — apply RoPE to last dimension
+        """
+        B, nH, d, N = x.shape
+        half = d // 2
+        freq_seq = torch.arange(half, device=x.device, dtype=x.dtype)
+        inv_freq = 1.0 / (10000 ** (freq_seq / half))  # (half,)
+
+        pos = torch.arange(N, device=x.device, dtype=x.dtype)
+        sinusoid = torch.outer(inv_freq, pos)  # (half, N)
+        sin, cos = sinusoid.sin(), sinusoid.cos()
+
+        x1, x2 = x[:, :, :half], x[:, :, half:]
+        x_rope = torch.cat([
+            x1 * cos[None, None, :, :] - x2 * sin[None, None, :, :],
+            x1 * sin[None, None, :, :] + x2 * cos[None, None, :, :]
+        ], dim=2)
+        return x_rope
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        B, C, H, W = x.shape
+        B0, C, H, W = x.shape
+        N = H * W
+        all_head_dim = self.num_heads * self.head_dim
 
-        # Compute Q, K, V (B, 3*dim, H, W)
-        qkv = self.qkv(x)  
-        # Split Q, K, V (B, 3, num_heads, head_dim, H*W)
-        qkv = qkv.reshape(B, 3, self.num_heads, self.head_dim, H * W)
-        q, k, v = qkv[:, 0], qkv[:, 1], qkv[:, 2]
+        qkv = self.qkv(x).flatten(2).transpose(1, 2)  # (B, N, 3*C)
+        
+        if self.area > 1:
+            qkv = qkv.reshape(B0 * self.area, N // self.area, C * 3)
+            B, N_area, _ = qkv.shape
+        else:
+            B = B0
+            N_area = N
 
-        # Transpose to (B, num_heads, H*W, head_dim) for attention computation
-        q = q.permute(0, 1, 3, 2)
-        k = k.permute(0, 1, 3, 2)
-        v = v.permute(0, 1, 3, 2)
+        # Separate Q, K, V
+        qkv = qkv.view(B, N_area, self.num_heads, 3 * self.head_dim).permute(0, 2, 3, 1)  # (B, nH, 3*hd, N)
+        q, k, v = qkv.split(self.head_dim, dim=2)  # each is (B, nH, hd, N)
 
-        # Apply RoPE positional embedding to Q and K
+        # Apply rotary positional embedding to q and k
         q = self.apply_rope(q)
         k = self.apply_rope(k)
 
-        # Scaled dot-product attention
-        attn = torch.matmul(q, k.transpose(-2, -1)) / math.sqrt(self.head_dim)
-        attn = F.softmax(attn, dim=-1)
+        # Attention: q^T @ k
+        attn = torch.matmul(q.transpose(-2, -1), k) * self.scale  # (B, nH, N, N)
+        attn = attn.softmax(dim=-1)
 
-        out = torch.matmul(attn, v)  # (B, num_heads, H*W, head_dim)
+        out = torch.matmul(v, attn.transpose(-2, -1))  # (B, nH, hd, N)
+        out = out.permute(0, 3, 1, 2).reshape(B, N_area, all_head_dim)  # (B, N, C)
 
-        # Restore shape: (B, num_heads, head_dim, H*W)
-        out = out.permute(0, 1, 3, 2).reshape(B, C, H, W)
+        if self.area > 1:
+            out = out.reshape(B0, N, all_head_dim)
+            v = v.permute(0, 3, 1, 2).reshape(B0, N, all_head_dim)
+        else:
+            v = v.permute(0, 3, 1, 2).reshape(B0, N, all_head_dim)
 
-        # Final projection
-        out = self.proj(out)
-        return out
+        # Convert (B, N, C) → (B, C, H, W)
+        out = out.transpose(1, 2).reshape(B0, all_head_dim, H, W)
+        v = v.transpose(1, 2).reshape(B0, all_head_dim, H, W)
 
-    def apply_rope(self, x: torch.Tensor) -> torch.Tensor:
-        B, H, L, D = x.shape
-        half = D // 2
-        x1 = x[..., :half]
-        x2 = x[..., half:]
-
-        # Create frequencies for RoPE
-        freqs = torch.arange(half, device=x.device).float()
-        inv_freq = 10000 ** (-freqs / half)
-        pos = torch.arange(L, device=x.device).float()
-
-        # Outer product to get frequency matrix (L, half)
-        freqs_cis = torch.einsum('l,d->ld', pos, inv_freq)  
-
-        # Compute cos and sin for RoPE
-        cos = freqs_cis.cos().unsqueeze(0).unsqueeze(0)  # (1,1,L,half)
-        sin = freqs_cis.sin().unsqueeze(0).unsqueeze(0)  # (1,1,L,half)
-
-        # Apply rotation
-        x_rotated = torch.cat([x1 * cos - x2 * sin, x1 * sin + x2 * cos], dim=-1)
-        return x_rotated
+        # Add depthwise conv positional enhancement
+        out = out + self.pe(v)
+        return self.proj(out)
 
 
 class AAttn(nn.Module):
