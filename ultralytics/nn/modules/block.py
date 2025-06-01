@@ -1690,112 +1690,77 @@ class TorchVision(nn.Module):
 
 
 
-
-def precompute_freqs_cis(dim, seqlen, base=10000.0):
-    freqs = 1.0 / (base ** (torch.arange(0, dim, 2, dtype=torch.float32) / dim))
-    t = torch.arange(seqlen, dtype=torch.float32)
-    freqs = torch.outer(t, freqs)
-    freqs_cis = torch.polar(torch.ones_like(freqs), freqs)
-    return freqs_cis  # (seqlen, dim//2)
-
-def apply_rotary_emb(x: Tensor, freqs_cis: Tensor) -> Tensor:
-    # x: (..., head_dim), where head_dim is even, last dim split into pairs for complex
-    x_reshaped = x.float().reshape(*x.shape[:-1], -1, 2).contiguous()
-    x_complex = torch.view_as_complex(x_reshaped)
-    freqs_cis = freqs_cis.to(x.device).unsqueeze(0).unsqueeze(0)  # (1, 1, seq_len, head_dim//2)
-    x_rot = x_complex * freqs_cis
-    x_out = torch.view_as_real(x_rot).flatten(-2)
-    return x_out.type_as(x)
-
 class AreaRoPEAttention(nn.Module):
-    def __init__(self, dim: int, num_heads: int, area: int = 1, max_seq_len: int = 1024):
+    def __init__(self, dim: int, num_heads: int, area: int = 1):
         super().__init__()
-        self.area = area
+        self.dim = dim
         self.num_heads = num_heads
+        self.area = area  # can be used later for area-wise grouping
         self.head_dim = dim // num_heads
-        all_head_dim = self.head_dim * self.num_heads
+        assert self.head_dim * num_heads == dim, "dim must be divisible by num_heads"
 
-        self.qkv = Conv(dim, all_head_dim * 3, 1, act=False)
-        self.proj = Conv(all_head_dim, dim, 1, act=False)
-        self.pe = Conv(all_head_dim, dim, 7, 1, 3, g=dim, act=False)
-
-        # Register RoPE buffer (non-trainable) up to max_seq_len
-        freqs_cis = precompute_freqs_cis(self.head_dim, max_seq_len)
-        self.register_buffer('freqs_cis', freqs_cis, persistent=False)
+        # QKV projection as 1x1 conv to keep spatial structure (B,C,H,W)
+        self.qkv = nn.Conv2d(dim, dim * 3, kernel_size=1, bias=False)
+        self.proj = nn.Conv2d(dim, dim, kernel_size=1)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        B_orig, C, H, W = x.shape
-        N = H * W
+        B, C, H, W = x.shape
 
-        qkv = self.qkv(x).flatten(2).transpose(1, 2)
+        # Compute Q, K, V (B, 3*dim, H, W)
+        qkv = self.qkv(x)  
+        # Split Q, K, V (B, 3, num_heads, head_dim, H*W)
+        qkv = qkv.reshape(B, 3, self.num_heads, self.head_dim, H * W)
+        q, k, v = qkv[:, 0], qkv[:, 1], qkv[:, 2]
 
-        if self.area > 1:
-            qkv = qkv.reshape(B_orig * self.area, N // self.area, C * 3)
-        B, N_mod, _ = qkv.shape
+        # Transpose to (B, num_heads, H*W, head_dim) for attention computation
+        q = q.permute(0, 1, 3, 2)
+        k = k.permute(0, 1, 3, 2)
+        v = v.permute(0, 1, 3, 2)
 
-        q, k, v = (
-            qkv.view(B, N_mod, self.num_heads, self.head_dim * 3)
-            .permute(0, 2, 3, 1)
-            .split([self.head_dim, self.head_dim, self.head_dim], dim=2)
-        )
+        # Apply RoPE positional embedding to Q and K
+        q = self.apply_rope(q)
+        k = self.apply_rope(k)
 
-        attn = (q.transpose(-2, -1) @ k) * (self.head_dim**-0.5)
-        attn = attn.softmax(dim=-1)
-        x = v @ attn.transpose(-2, -1)
-        x = x.permute(0, 3, 1, 2)
-        v = v.permute(0, 3, 1, 2)
+        # Scaled dot-product attention
+        attn = torch.matmul(q, k.transpose(-2, -1)) / math.sqrt(self.head_dim)
+        attn = F.softmax(attn, dim=-1)
 
-        if self.area > 1:
-            # use B_orig for correct reshape back
-            x = x.reshape(B_orig, H * W, C)
-            v = v.reshape(B_orig, H * W, C)
-        else:
-            x = x.reshape(B_orig, H * W, C)
-            v = v.reshape(B_orig, H * W, C)
+        out = torch.matmul(attn, v)  # (B, num_heads, H*W, head_dim)
 
-        x = x.reshape(B_orig, H, W, C).permute(0, 3, 1, 2).contiguous()
-        v = v.reshape(B_orig, H, W, C).permute(0, 3, 1, 2).contiguous()
+        # Restore shape: (B, num_heads, head_dim, H*W)
+        out = out.permute(0, 1, 3, 2).reshape(B, C, H, W)
 
-        x = x + self.pe(v)
-        return self.proj(x)
+        # Final projection
+        out = self.proj(out)
+        return out
 
+    def apply_rope(self, x: torch.Tensor) -> torch.Tensor:
+        B, H, L, D = x.shape
+        half = D // 2
+        x1 = x[..., :half]
+        x2 = x[..., half:]
+
+        # Create frequencies for RoPE
+        freqs = torch.arange(half, device=x.device).float()
+        inv_freq = 10000 ** (-freqs / half)
+        pos = torch.arange(L, device=x.device).float()
+
+        # Outer product to get frequency matrix (L, half)
+        freqs_cis = torch.einsum('l,d->ld', pos, inv_freq)  
+
+        # Compute cos and sin for RoPE
+        cos = freqs_cis.cos().unsqueeze(0).unsqueeze(0)  # (1,1,L,half)
+        sin = freqs_cis.sin().unsqueeze(0).unsqueeze(0)  # (1,1,L,half)
+
+        # Apply rotation
+        x_rotated = torch.cat([x1 * cos - x2 * sin, x1 * sin + x2 * cos], dim=-1)
+        return x_rotated
 
 
 class AAttn(nn.Module):
-    """
-    Area-attention module for YOLO models, providing efficient attention mechanisms.
-
-    This module implements an area-based attention mechanism that processes input features in a spatially-aware manner,
-    making it particularly effective for object detection tasks.
-
-    Attributes:
-        area (int): Number of areas the feature map is divided.
-        num_heads (int): Number of heads into which the attention mechanism is divided.
-        head_dim (int): Dimension of each attention head.
-        qkv (Conv): Convolution layer for computing query, key and value tensors.
-        proj (Conv): Projection convolution layer.
-        pe (Conv): Position encoding convolution layer.
-
-    Methods:
-        forward: Applies area-attention to input tensor.
-
-    Examples:
-        >>> attn = AAttn(dim=256, num_heads=8, area=4)
-        >>> x = torch.randn(1, 256, 32, 32)
-        >>> output = attn(x)
-        >>> print(output.shape)
-        torch.Size([1, 256, 32, 32])
-    """
 
     def __init__(self, dim: int, num_heads: int, area: int = 1):
-        """
-        Initialize an Area-attention module for YOLO models.
-
-        Args:
-            dim (int): Number of hidden channels.
-            num_heads (int): Number of heads into which the attention mechanism is divided.
-            area (int): Number of areas the feature map is divided.
-        """
+    
         super().__init__()
         self.area = area
 
@@ -1808,15 +1773,7 @@ class AAttn(nn.Module):
         self.pe = Conv(all_head_dim, dim, 7, 1, 3, g=dim, act=False)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """
-        Process the input tensor through the area-attention.
-
-        Args:
-            x (torch.Tensor): Input tensor.
-
-        Returns:
-            (torch.Tensor): Output tensor after area-attention.
-        """
+        
         B, C, H, W = x.shape
         N = H * W
 
@@ -1848,39 +1805,9 @@ class AAttn(nn.Module):
 
 
 class ABlock(nn.Module):
-    """
-    Area-attention block module for efficient feature extraction in YOLO models.
-
-    This module implements an area-attention mechanism combined with a feed-forward network for processing feature maps.
-    It uses a novel area-based attention approach that is more efficient than traditional self-attention while
-    maintaining effectiveness.
-
-    Attributes:
-        attn (AAttn): Area-attention module for processing spatial features.
-        mlp (nn.Sequential): Multi-layer perceptron for feature transformation.
-
-    Methods:
-        _init_weights: Initializes module weights using truncated normal distribution.
-        forward: Applies area-attention and feed-forward processing to input tensor.
-
-    Examples:
-        >>> block = ABlock(dim=256, num_heads=8, mlp_ratio=1.2, area=1)
-        >>> x = torch.randn(1, 256, 32, 32)
-        >>> output = block(x)
-        >>> print(output.shape)
-        torch.Size([1, 256, 32, 32])
-    """
 
     def __init__(self, dim: int, num_heads: int, mlp_ratio: float = 1.2, area: int = 1):
-        """
-        Initialize an Area-attention block module.
-
-        Args:
-            dim (int): Number of input channels.
-            num_heads (int): Number of heads into which the attention mechanism is divided.
-            mlp_ratio (float): Expansion ratio for MLP hidden dimension.
-            area (int): Number of areas the feature map is divided.
-        """
+    
         super().__init__()
 
         self.attn = AreaRoPEAttention(dim, num_heads=num_heads, area=area)
@@ -1890,55 +1817,20 @@ class ABlock(nn.Module):
         self.apply(self._init_weights)
 
     def _init_weights(self, m: nn.Module):
-        """
-        Initialize weights using a truncated normal distribution.
-
-        Args:
-            m (nn.Module): Module to initialize.
-        """
+       
         if isinstance(m, nn.Conv2d):
             nn.init.trunc_normal_(m.weight, std=0.02)
             if m.bias is not None:
                 nn.init.constant_(m.bias, 0)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """
-        Forward pass through ABlock.
-
-        Args:
-            x (torch.Tensor): Input tensor.
-
-        Returns:
-            (torch.Tensor): Output tensor after area-attention and feed-forward processing.
-        """
+       
         x = x + self.attn(x)
         return x + self.mlp(x)
 
 
 class A2C2f(nn.Module):
-    """
-    Area-Attention C2f module for enhanced feature extraction with area-based attention mechanisms.
-
-    This module extends the C2f architecture by incorporating area-attention and ABlock layers for improved feature
-    processing. It supports both area-attention and standard convolution modes.
-
-    Attributes:
-        cv1 (Conv): Initial 1x1 convolution layer that reduces input channels to hidden channels.
-        cv2 (Conv): Final 1x1 convolution layer that processes concatenated features.
-        gamma (nn.Parameter | None): Learnable parameter for residual scaling when using area attention.
-        m (nn.ModuleList): List of either ABlock or C3k modules for feature processing.
-
-    Methods:
-        forward: Processes input through area-attention or standard convolution pathway.
-
-    Examples:
-        >>> m = A2C2f(512, 512, n=1, a2=True, area=1)
-        >>> x = torch.randn(1, 512, 32, 32)
-        >>> output = m(x)
-        >>> print(output.shape)
-        torch.Size([1, 512, 32, 32])
-    """
-
+   
     def __init__(
         self,
         c1: int,
@@ -1952,21 +1844,7 @@ class A2C2f(nn.Module):
         g: int = 1,
         shortcut: bool = True,
     ):
-        """
-        Initialize Area-Attention C2f module.
-
-        Args:
-            c1 (int): Number of input channels.
-            c2 (int): Number of output channels.
-            n (int): Number of ABlock or C3k modules to stack.
-            a2 (bool): Whether to use area attention blocks. If False, uses C3k blocks instead.
-            area (int): Number of areas the feature map is divided.
-            residual (bool): Whether to use residual connections with learnable gamma parameter.
-            mlp_ratio (float): Expansion ratio for MLP hidden dimension.
-            e (float): Channel expansion ratio for hidden channels.
-            g (int): Number of groups for grouped convolutions.
-            shortcut (bool): Whether to use shortcut connections in C3k blocks.
-        """
+        
         super().__init__()
         c_ = int(c2 * e)  # hidden channels
         assert c_ % 32 == 0, "Dimension of ABlock be a multiple of 32."
@@ -1983,15 +1861,7 @@ class A2C2f(nn.Module):
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """
-        Forward pass through A2C2f layer.
-
-        Args:
-            x (torch.Tensor): Input tensor.
-
-        Returns:
-            (torch.Tensor): Output tensor after processing.
-        """
+        
         y = [self.cv1(x)]
         y.extend(m(y[-1]) for m in self.m)
         y = self.cv2(torch.cat(y, 1))
