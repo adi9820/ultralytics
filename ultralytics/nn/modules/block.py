@@ -1724,56 +1724,40 @@ class AreaRoPEAttention(nn.Module):
         self.register_buffer('freqs_cis', freqs_cis, persistent=False)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        B, C, H, W = x.shape
+        B_orig, C, H, W = x.shape
         N = H * W
 
-        # Slice or dynamically generate RoPE depending on N
-        if N <= self.freqs_cis.shape[0]:
-            freqs_cis = self.freqs_cis[:N].to(x.device)
-        else:
-            freqs_cis = precompute_freqs_cis(self.head_dim, N).to(x.device)
-
-        # Compute qkv projections
-        qkv = self.qkv(x).flatten(2).transpose(1, 2)  # (B, N, 3 * all_head_dim)
+        qkv = self.qkv(x).flatten(2).transpose(1, 2)
 
         if self.area > 1:
-            qkv = qkv.reshape(B * self.area, N // self.area, C * 3)
-            B_, N, _ = qkv.shape
-        else:
-            B_ = B
+            qkv = qkv.reshape(B_orig * self.area, N // self.area, C * 3)
+        B, N_mod, _ = qkv.shape
 
-        # Reshape and split qkv into q, k, v
-        qkv = qkv.view(B_, N, self.num_heads, self.head_dim * 3).permute(0, 2, 3, 1)
-        q, k, v = torch.split(qkv, self.head_dim, dim=2)  # each: (B_, num_heads, head_dim, N)
+        q, k, v = (
+            qkv.view(B, N_mod, self.num_heads, self.head_dim * 3)
+            .permute(0, 2, 3, 1)
+            .split([self.head_dim, self.head_dim, self.head_dim], dim=2)
+        )
 
-        # Apply RoPE
-        q = apply_rotary_emb(q.permute(0, 1, 3, 2), freqs_cis)  # (B_, num_heads, N, head_dim)
-        k = apply_rotary_emb(k.permute(0, 1, 3, 2), freqs_cis)
-
-        # Transpose back
-        q = q.permute(0, 1, 3, 2)
-        k = k.permute(0, 1, 3, 2)
-
-        # Attention
-        attn = torch.matmul(q.transpose(-2, -1), k) * (self.head_dim ** -0.5)
+        attn = (q.transpose(-2, -1) @ k) * (self.head_dim**-0.5)
         attn = attn.softmax(dim=-1)
-
-        # Apply attention
-        x_out = torch.matmul(v, attn.transpose(-2, -1))  # (B_, num_heads, head_dim, N)
-        x_out = x_out.permute(0, 3, 1, 2).reshape(B_, N, -1)
+        x = v @ attn.transpose(-2, -1)
+        x = x.permute(0, 3, 1, 2)
+        v = v.permute(0, 3, 1, 2)
 
         if self.area > 1:
-            x_out = x_out.reshape(B // self.area, N * self.area, C)
-            B_, N, _ = x_out.shape
+            # use B_orig for correct reshape back
+            x = x.reshape(B_orig, H * W, C)
+            v = v.reshape(B_orig, H * W, C)
+        else:
+            x = x.reshape(B_orig, H * W, C)
+            v = v.reshape(B_orig, H * W, C)
 
-        # To (B_, C, H, W)
-        x_out = x_out.reshape(B_, H, W, C).permute(0, 3, 1, 2).contiguous()
+        x = x.reshape(B_orig, H, W, C).permute(0, 3, 1, 2).contiguous()
+        v = v.reshape(B_orig, H, W, C).permute(0, 3, 1, 2).contiguous()
 
-        # Positional conv
-        v = v.permute(0, 3, 1, 2).reshape(B_, C, H, W).contiguous()
-        x_out = x_out + self.pe(v)
-
-        return self.proj(x_out)
+        x = x + self.pe(v)
+        return self.proj(x)
 
 
 
