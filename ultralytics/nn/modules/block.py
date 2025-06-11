@@ -1823,7 +1823,7 @@ class ABlock(nn.Module):
 
         self.attn = AreaRoPEAttention(dim, num_heads=num_heads, area=area)
         mlp_hidden_dim = int(dim * mlp_ratio)
-        self.mlp = nn.Sequential(Conv(dim, mlp_hidden_dim, 1), Conv(mlp_hidden_dim, dim, 1, act=False))
+        self.mlp = nn.Sequential(Conv(dim, mlp_hidden_dim, k=1), Conv(dim, mlp_hidden_dim, k=3, p=1), Conv(mlp_hidden_dim, dim, k=5, p=2, act=False))
 
         self.apply(self._init_weights)
 
