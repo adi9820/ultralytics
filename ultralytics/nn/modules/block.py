@@ -1711,7 +1711,7 @@ class AreaRoPEAttention(nn.Module):
         B, nH, d, N = x.shape
         half = d // 2
         freq_seq = torch.arange(half, device=x.device, dtype=x.dtype)
-        inv_freq = 1.0 / (10000 ** (freq_seq / half))  # (half,)
+        inv_freq = 1.0 / (2500 ** (freq_seq / half))  # (half,)
 
         pos = torch.arange(N, device=x.device, dtype=x.dtype)
         sinusoid = torch.outer(inv_freq, pos)  # (half, N)
