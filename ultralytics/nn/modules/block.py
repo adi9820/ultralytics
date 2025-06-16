@@ -1945,14 +1945,14 @@ class A2C2f(nn.Module):
         self.cv2 = Conv((1 + n) * c_, c2, 1)
 
         self.gamma = nn.Parameter(0.01 * torch.ones(c2), requires_grad=True) if a2 and residual else None
-        self.m = nn.ModuleList(
-            for _ in range(n):
-                if a2 and area>1:
-                    nn.Sequential(*(ABlock(c_, c_ // 32, mlp_ratio, area) for _ in range(2)))
-                elif a2 and area==1:
-                    nn.Sequential(*(AB(c_, c_ // 32, mlp_ratio) for _ in range(2)))
-                else C3k(c_, c_, 2, shortcut, g)     
-        )
+        self.m = nn.ModuleList([
+            nn.Sequential(*(ABlock(c_, c_ // 32, mlp_ratio, area) for _ in range(2)))
+            if a2 and area > 1 else
+            nn.Sequential(*(AB(c_, c_ // 32, mlp_ratio) for _ in range(2)))
+            if a2 and area == 1 else
+            C3k(c_, c_, 2, shortcut, g)
+            for _ in range(n)
+        ])
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         
