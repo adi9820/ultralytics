@@ -1881,8 +1881,8 @@ class AB(nn.Module):
 
         self.attn = RoPEAttn(dim, num_heads=num_heads)
         mlp_hidden_dim = int(dim * mlp_ratio)
-        self.mlp = nn.Sequential(Conv(dim, mlp_hidden_dim, k=1), Conv(mlp_hidden_dim, mlp_hidden_dim, k=1), Conv(mlp_hidden_dim, dim, k=1, act=False))
-
+        self.mlp = nn.Sequential(Conv(dim, mlp_hidden_dim, k=1), Conv(mlp_hidden_dim, dim, k=1, act=False))
+        #self.mlp = nn.Sequential(Conv(dim, mlp_hidden_dim, k=1), Conv(mlp_hidden_dim, mlp_hidden_dim, k=1), Conv(mlp_hidden_dim, dim, k=1, act=False))
         self.apply(self._init_weights)
 
     def _init_weights(self, m: nn.Module):
@@ -1906,8 +1906,8 @@ class ABlock(nn.Module):
 
         self.attn = AAttn(dim, num_heads=num_heads, area=area)
         mlp_hidden_dim = int(dim * mlp_ratio)
-        self.mlp = nn.Sequential(Conv(dim, mlp_hidden_dim, k=1), Conv(mlp_hidden_dim, mlp_hidden_dim, k=1), Conv(mlp_hidden_dim, dim, k=1, act=False))
-
+        self.mlp = nn.Sequential(Conv(dim, mlp_hidden_dim, k=1),  Conv(mlp_hidden_dim, dim, k=1, act=False))
+        #self.mlp = nn.Sequential(Conv(dim, mlp_hidden_dim, k=1), Conv(mlp_hidden_dim, mlp_hidden_dim, k=1), Conv(mlp_hidden_dim, dim, k=1, act=False))
         self.apply(self._init_weights)
 
     def _init_weights(self, m: nn.Module):
