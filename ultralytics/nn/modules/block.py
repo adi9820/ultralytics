@@ -237,82 +237,82 @@ class SPPF(nn.Module):
         return y + x if getattr(self, "add", False) else y
 
 ### Coordinate Attention
-class CoordinateAttention(nn.Module):
-    def __init__(self, c, reduction=32):
-        super().__init__()
-        mid = max(8, c // reduction)
+# class CoordinateAttention(nn.Module):
+#     def __init__(self, c, reduction=32):
+#         super().__init__()
+#         mid = max(8, c // reduction)
 
-        self.pool_h = nn.AdaptiveAvgPool2d((None, 1))
-        self.pool_w = nn.AdaptiveAvgPool2d((1, None))
+#         self.pool_h = nn.AdaptiveAvgPool2d((None, 1))
+#         self.pool_w = nn.AdaptiveAvgPool2d((1, None))
 
-        # Shared bottleneck
-        self.conv1 = nn.Conv2d(c, mid, 1, bias=False)
-        self.bn1 = nn.BatchNorm2d(mid)
-        self.act = nn.SiLU(inplace=True)
+#         # Shared bottleneck
+#         self.conv1 = nn.Conv2d(c, mid, 1, bias=False)
+#         self.bn1 = nn.BatchNorm2d(mid)
+#         self.act = nn.SiLU(inplace=True)
 
-        # Depthwise projections (cheap)
-        self.conv_h = nn.Conv2d(mid, c, 1, groups=mid, bias=False)
-        self.conv_w = nn.Conv2d(mid, c, 1, groups=mid, bias=False)
+#         # Depthwise projections (cheap)
+#         self.conv_h = nn.Conv2d(mid, c, 1, groups=mid, bias=False)
+#         self.conv_w = nn.Conv2d(mid, c, 1, groups=mid, bias=False)
 
-    def forward(self, x):
-        b, c, h, w = x.shape
+#     def forward(self, x):
+#         b, c, h, w = x.shape
 
-        x_h = self.pool_h(x)
-        x_w = self.pool_w(x).permute(0, 1, 3, 2)
+#         x_h = self.pool_h(x)
+#         x_w = self.pool_w(x).permute(0, 1, 3, 2)
 
-        y = torch.cat([x_h, x_w], dim=2)
-        y = self.act(self.bn1(self.conv1(y)))
+#         y = torch.cat([x_h, x_w], dim=2)
+#         y = self.act(self.bn1(self.conv1(y)))
 
-        x_h, x_w = torch.split(y, [h, w], dim=2)
-        x_w = x_w.permute(0, 1, 3, 2)
+#         x_h, x_w = torch.split(y, [h, w], dim=2)
+#         x_w = x_w.permute(0, 1, 3, 2)
 
-        return x * torch.sigmoid(self.conv_h(x_h)) * torch.sigmoid(self.conv_w(x_w))
-    # """
-    # Coordinate Attention Module for TMD-YOLO.
-    # Captures long-range dependencies with precise positional information.
+#         return x * torch.sigmoid(self.conv_h(x_h)) * torch.sigmoid(self.conv_w(x_w))
+    """
+    Coordinate Attention Module for TMD-YOLO.
+    Captures long-range dependencies with precise positional information.
     
-    # Paper: "Coordinate Attention for Efficient Mobile Network Design"
-    # """
-    # def __init__(self, in_channels, out_channels, reduction=32):
-    #     super().__init__()
-    #     self.pool_h = nn.AdaptiveAvgPool2d((None, 1))  # (H, 1)
-    #     self.pool_w = nn.AdaptiveAvgPool2d((1, None))  # (1, W)
+    Paper: "Coordinate Attention for Efficient Mobile Network Design"
+    """
+    def __init__(self, in_channels, out_channels, reduction=32):
+        super().__init__()
+        self.pool_h = nn.AdaptiveAvgPool2d((None, 1))  # (H, 1)
+        self.pool_w = nn.AdaptiveAvgPool2d((1, None))  # (1, W)
         
-    #     mid_channels = max(8, in_channels // reduction)
+        mid_channels = max(8, in_channels // reduction)
         
-    #     self.conv1 = nn.Conv2d(in_channels, mid_channels, kernel_size=1, stride=1, padding=0)
-    #     self.bn1 = nn.BatchNorm2d(mid_channels)
-    #     self.act = nn.SiLU(inplace=True)  # YOLOv8 uses SiLU
+        self.conv1 = nn.Conv2d(in_channels, mid_channels, kernel_size=1, stride=1, padding=0)
+        self.bn1 = nn.BatchNorm2d(mid_channels)
+        self.act = nn.SiLU(inplace=True)  # YOLOv8 uses SiLU
         
-    #     self.conv_h = nn.Conv2d(mid_channels, out_channels, kernel_size=1, stride=1, padding=0)
-    #     self.conv_w = nn.Conv2d(mid_channels, out_channels, kernel_size=1, stride=1, padding=0)
+        self.conv_h = nn.Conv2d(mid_channels, out_channels, kernel_size=1, stride=1, padding=0)
+        self.conv_w = nn.Conv2d(mid_channels, out_channels, kernel_size=1, stride=1, padding=0)
         
-    # def forward(self, x):
-    #     identity = x
-    #     b, c, h, w = x.size()
+    def forward(self, x):
+        identity = x
+        b, c, h, w = x.size()
         
-    #     # Coordinate Embedding
-    #     x_h = self.pool_h(x)  # (B, C, H, 1)
-    #     x_w = self.pool_w(x).permute(0, 1, 3, 2)  # (B, C, W, 1) -> (B, C, 1, W) -> permute to (B, C, W, 1)
+        # Coordinate Embedding
+        x_h = self.pool_h(x)  # (B, C, H, 1)
+        x_w = self.pool_w(x).permute(0, 1, 3, 2)  # (B, C, W, 1) -> (B, C, 1, W) -> permute to (B, C, W, 1)
         
-    #     # Concatenate along spatial dimension
-    #     y = torch.cat([x_h, x_w], dim=2)  # (B, C, H+W, 1)
+        # Concatenate along spatial dimension
+        y = torch.cat([x_h, x_w], dim=2)  # (B, C, H+W, 1)
         
-    #     # Attention Generation
-    #     y = self.conv1(y)
-    #     y = self.bn1(y)
-    #     y = self.act(y)
+        # Attention Generation
+        y = self.conv1(y)
+        y = self.bn1(y)
+        y = self.act(y)
         
-    #     # Split
-    #     x_h, x_w = torch.split(y, [h, w], dim=2)
-    #     x_w = x_w.permute(0, 1, 3, 2)  # (B, C/r, 1, W)
+        # Split
+        x_h, x_w = torch.split(y, [h, w], dim=2)
+        x_w = x_w.permute(0, 1, 3, 2)  # (B, C/r, 1, W)
         
-    #     # Attention Application
-    #     a_h = self.conv_h(x_h).sigmoid()
-    #     a_w = self.conv_w(x_w).sigmoid()
+        # Attention Application
+        a_h = self.conv_h(x_h).sigmoid()
+        a_w = self.conv_w(x_w).sigmoid()
         
-    #     out = identity * a_h * a_w
-    #     return out
+        out = identity * a_h * a_w
+        return out
 
 class C1(nn.Module):
     """
@@ -346,109 +346,109 @@ class C1(nn.Module):
         return out
 ### SOEM
 class C2(nn.Module):
-    def __init__(self, c1, c2=None, reduction=16):
-        super().__init__()
-        c2 = c2 or c1
-        mid = max(8, c1 // reduction)
-
-        # Axis-wise spatial attention
-        self.pool_h = nn.AdaptiveAvgPool2d((None, 1))
-        self.pool_w = nn.AdaptiveAvgPool2d((1, None))
-        self.spatial = nn.Conv2d(c1, 1, 1)
-
-        # Channel attention
-        self.ca = nn.Sequential(
-            nn.AdaptiveAvgPool2d(1),
-            nn.Conv2d(c1, mid, 1),
-            nn.ReLU(inplace=True),
-            nn.Conv2d(mid, c1, 1),
-            nn.Sigmoid()
-        )
-
-        # Depthwise refinement
-        self.refine = nn.Sequential(
-            nn.Conv2d(c1, c1, 3, padding=1, groups=c1),
-            nn.BatchNorm2d(c1),
-            nn.SiLU(inplace=True),
-            nn.Conv2d(c1, c2, 1)
-        )
-
-        self.alpha = nn.Parameter(torch.tensor(0.3))
-
-        # Channel match if needed
-        self.match = nn.Conv2d(c1, c2, 1, bias=False) if c1 != c2 else nn.Identity()
-
-    def forward(self, x):
-        s = torch.sigmoid(self.spatial(self.pool_h(x) + self.pool_w(x)))
-        out = x * s * self.ca(x)
-        return self.match(x) + self.alpha * self.refine(out)
-
-    # """
-    # Small Object Enhancement Module for TMD-YOLO.
-    # Enhances small object features through spatial and channel attention.
-    # Added after S3 stage (80x80 feature map) in backbone.
-    # """
     # def __init__(self, c1, c2=None, reduction=16):
     #     super().__init__()
     #     c2 = c2 or c1
-        
-    #     # Spatial Attention
-    #     self.spatial_conv1 = nn.Conv2d(c1, c1 // reduction, 1)
-    #     self.spatial_relu = nn.ReLU(inplace=True)
-    #     self.spatial_conv2 = nn.Conv2d(c1 // reduction, 1, 3, padding=1)
-    #     self.spatial_sigmoid = nn.Sigmoid()
-        
-    #     # Channel Attention
-    #     self.gap = nn.AdaptiveAvgPool2d(1)
-    #     self.channel_conv1 = nn.Conv2d(c1, c1 // reduction, 1)
-    #     self.channel_relu = nn.ReLU(inplace=True)
-    #     self.channel_conv2 = nn.Conv2d(c1 // reduction, c1, 1)
-    #     self.channel_sigmoid = nn.Sigmoid()
-        
-    #     # Feature Refinement
+    #     mid = max(8, c1 // reduction)
+
+    #     # Axis-wise spatial attention
+    #     self.pool_h = nn.AdaptiveAvgPool2d((None, 1))
+    #     self.pool_w = nn.AdaptiveAvgPool2d((1, None))
+    #     self.spatial = nn.Conv2d(c1, 1, 1)
+
+    #     # Channel attention
+    #     self.ca = nn.Sequential(
+    #         nn.AdaptiveAvgPool2d(1),
+    #         nn.Conv2d(c1, mid, 1),
+    #         nn.ReLU(inplace=True),
+    #         nn.Conv2d(mid, c1, 1),
+    #         nn.Sigmoid()
+    #     )
+
+    #     # Depthwise refinement
     #     self.refine = nn.Sequential(
-    #         nn.Conv2d(c1, c1, 3, padding=1),
+    #         nn.Conv2d(c1, c1, 3, padding=1, groups=c1),
     #         nn.BatchNorm2d(c1),
     #         nn.SiLU(inplace=True),
-    #         nn.Conv2d(c1, c2, 3, padding=1),
-    #         nn.BatchNorm2d(c2)
+    #         nn.Conv2d(c1, c2, 1)
     #     )
-        
-    #     # Learnable parameter
-    #     self.alpha = nn.Parameter(torch.ones(1, c2, 1, 1) * 0.5)
-        
-    #     # Match channels if different
-    #     self.match = nn.Conv2d(c1, c2, 1) if c1 != c2 else nn.Identity()
-        
+
+    #     self.alpha = nn.Parameter(torch.tensor(0.3))
+
+    #     # Channel match if needed
+    #     self.match = nn.Conv2d(c1, c2, 1, bias=False) if c1 != c2 else nn.Identity()
+
     # def forward(self, x):
-    #     # Spatial Attention
-    #     s_att = self.spatial_sigmoid(
-    #         self.spatial_conv2(
-    #             self.spatial_relu(
-    #                 self.spatial_conv1(x)
-    #             )
-    #         )
-    #     )
+    #     s = torch.sigmoid(self.spatial(self.pool_h(x) + self.pool_w(x)))
+    #     out = x * s * self.ca(x)
+    #     return self.match(x) + self.alpha * self.refine(out)
+
+    """
+    Small Object Enhancement Module for TMD-YOLO.
+    Enhances small object features through spatial and channel attention.
+    Added after S3 stage (80x80 feature map) in backbone.
+    """
+    def __init__(self, c1, c2=None, reduction=16):
+        super().__init__()
+        c2 = c2 or c1
         
-    #     # Channel Attention
-    #     c_att = self.channel_sigmoid(
-    #         self.channel_conv2(
-    #             self.channel_relu(
-    #                 self.channel_conv1(
-    #                     self.gap(x)
-    #                 )
-    #             )
-    #         )
-    #     )
+        # Spatial Attention
+        self.spatial_conv1 = nn.Conv2d(c1, c1 // reduction, 1)
+        self.spatial_relu = nn.ReLU(inplace=True)
+        self.spatial_conv2 = nn.Conv2d(c1 // reduction, 1, 3, padding=1)
+        self.spatial_sigmoid = nn.Sigmoid()
         
-    #     # Integrated attention
-    #     attended = s_att * x * c_att
+        # Channel Attention
+        self.gap = nn.AdaptiveAvgPool2d(1)
+        self.channel_conv1 = nn.Conv2d(c1, c1 // reduction, 1)
+        self.channel_relu = nn.ReLU(inplace=True)
+        self.channel_conv2 = nn.Conv2d(c1 // reduction, c1, 1)
+        self.channel_sigmoid = nn.Sigmoid()
         
-    #     # Feature Refinement
-    #     refined = self.refine(attended)
+        # Feature Refinement
+        self.refine = nn.Sequential(
+            nn.Conv2d(c1, c1, 3, padding=1),
+            nn.BatchNorm2d(c1),
+            nn.SiLU(inplace=True),
+            nn.Conv2d(c1, c2, 3, padding=1),
+            nn.BatchNorm2d(c2)
+        )
         
-    #     # Output with residual
-    #     return self.match(x) + self.alpha * refined
+        # Learnable parameter
+        self.alpha = nn.Parameter(torch.ones(1, c2, 1, 1) * 0.5)
+        
+        # Match channels if different
+        self.match = nn.Conv2d(c1, c2, 1) if c1 != c2 else nn.Identity()
+        
+    def forward(self, x):
+        # Spatial Attention
+        s_att = self.spatial_sigmoid(
+            self.spatial_conv2(
+                self.spatial_relu(
+                    self.spatial_conv1(x)
+                )
+            )
+        )
+        
+        # Channel Attention
+        c_att = self.channel_sigmoid(
+            self.channel_conv2(
+                self.channel_relu(
+                    self.channel_conv1(
+                        self.gap(x)
+                    )
+                )
+            )
+        )
+        
+        # Integrated attention
+        attended = s_att * x * c_att
+        
+        # Feature Refinement
+        refined = self.refine(attended)
+        
+        # Output with residual
+        return self.match(x) + self.alpha * refined
     
 
 class C2f(nn.Module):
@@ -470,20 +470,20 @@ class C2f(nn.Module):
         self.cv1 = Conv(c1, 2 * self.c, 1, 1)
         self.cv2 = Conv((2 + n) * self.c, c2, 1)  # optional act=FReLU(c2)
         self.m = nn.ModuleList(Bottleneck(self.c, self.c, shortcut, g, k=((3, 3), (3, 3)), e=1.0) for _ in range(n))
-        self.ca = CoordinateAttention(c2, reduction=32)
+        
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """Forward pass through C2f layer."""
         y = list(self.cv1(x).chunk(2, 1))
         y.extend(m(y[-1]) for m in self.m)
-        return self.ca(self.cv2(torch.cat(y, 1)))
+        return self.cv2(torch.cat(y, 1))
 
     def forward_split(self, x: torch.Tensor) -> torch.Tensor:
         """Forward pass using split() instead of chunk()."""
         y = self.cv1(x).split((self.c, self.c), 1)
         y = [y[0], y[1]]
         y.extend(m(y[-1]) for m in self.m)
-        return self.ca(self.cv2(torch.cat(y, 1)))
+        return self.cv2(torch.cat(y, 1))
 
 
 class C3(nn.Module):
@@ -541,71 +541,71 @@ class CCA(nn.Module):
         return self.proj(x) * att
     
 class C3x(nn.Module):
-    """Faster Implementation of CSP Bottleneck with 2 convolutions."""
+    # """Faster Implementation of CSP Bottleneck with 2 convolutions."""
 
-    def __init__(self, c1: int, c2: int, n: int = 1, shortcut: bool = False, g: int = 1, e: float = 0.5):
-        """Initialize a CSP bottleneck with 2 convolutions.
+    # def __init__(self, c1: int, c2: int, n: int = 1, shortcut: bool = False, g: int = 1, e: float = 0.5):
+    #     """Initialize a CSP bottleneck with 2 convolutions.
 
-        Args:
-            c1 (int): Input channels.
-            c2 (int): Output channels.
-            n (int): Number of Bottleneck blocks.
-            shortcut (bool): Whether to use shortcut connections.
-            g (int): Groups for convolutions.
-            e (float): Expansion ratio.
-        """
-        super().__init__()
-        self.c = int(c2 * e)  # hidden channels
-        self.cv1 = Conv(c1, 2 * self.c, 1, 1)
-        self.cv2 = Conv((2 + n) * self.c, c2, 1)  # optional act=FReLU(c2)
-        self.m = nn.ModuleList(Bottleneck(self.c, self.c, shortcut, g, k=((3, 3), (3, 3)), e=1.0) for _ in range(n))
-        self.attention = CCA(c2, c2, reduction=16)
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """Forward pass through C2f layer."""
-        y = list(self.cv1(x).chunk(2, 1))
-        y.extend(m(y[-1]) for m in self.m)
-        return self.attention(self.cv2(torch.cat(y, 1)))
-
-    def forward_split(self, x: torch.Tensor) -> torch.Tensor:
-        """Forward pass using split() instead of chunk()."""
-        y = self.cv1(x).split((self.c, self.c), 1)
-        y = [y[0], y[1]]
-        y.extend(m(y[-1]) for m in self.m)
-        return self.attention(self.cv2(torch.cat(y, 1)))
-
-    # """
-    # C2f with Color-Channel Attention.
-    # Used in: NECK (RAFPN) for feature fusion
-   
-    # Structure: C2f operations → Color-Channel Attention
-   
-    # This is the NECK counterpart of C2f_CA (backbone).
-    # - C2f_CA uses Coordinate Attention (spatial awareness)
-    # - C2f_CCA uses Color-Channel Attention (color/ripeness awareness)
-    # """
-   
-    # def __init__(self, c1, c2, n=1, shortcut=False, g=1, e=0.5):
+    #     Args:
+    #         c1 (int): Input channels.
+    #         c2 (int): Output channels.
+    #         n (int): Number of Bottleneck blocks.
+    #         shortcut (bool): Whether to use shortcut connections.
+    #         g (int): Groups for convolutions.
+    #         e (float): Expansion ratio.
+    #     """
     #     super().__init__()
-    #     self.c = int(c2 * e)
+    #     self.c = int(c2 * e)  # hidden channels
     #     self.cv1 = Conv(c1, 2 * self.c, 1, 1)
-    #     self.cv2 = Conv((2 + n) * self.c, c2, 1)
-    #     self.m = nn.ModuleList(
-    #         Bottleneck(self.c, self.c, shortcut, g, k=((3, 3), (3, 3)), e=1.0)
-    #         for _ in range(n)
-    #     )
-    #     # Color-Channel Attention instead of Coordinate Attention
+    #     self.cv2 = Conv((2 + n) * self.c, c2, 1)  # optional act=FReLU(c2)
+    #     self.m = nn.ModuleList(Bottleneck(self.c, self.c, shortcut, g, k=((3, 3), (3, 3)), e=1.0) for _ in range(n))
     #     self.attention = CCA(c2, c2, reduction=16)
 
-    # def forward(self, x):
+    # def forward(self, x: torch.Tensor) -> torch.Tensor:
+    #     """Forward pass through C2f layer."""
     #     y = list(self.cv1(x).chunk(2, 1))
     #     y.extend(m(y[-1]) for m in self.m)
     #     return self.attention(self.cv2(torch.cat(y, 1)))
 
-    # def forward_split(self, x):
-    #     y = list(self.cv1(x).split((self.c, self.c), 1))
+    # def forward_split(self, x: torch.Tensor) -> torch.Tensor:
+    #     """Forward pass using split() instead of chunk()."""
+    #     y = self.cv1(x).split((self.c, self.c), 1)
+    #     y = [y[0], y[1]]
     #     y.extend(m(y[-1]) for m in self.m)
     #     return self.attention(self.cv2(torch.cat(y, 1)))
+
+    """
+    C2f with Color-Channel Attention.
+    Used in: NECK (RAFPN) for feature fusion
+   
+    Structure: C2f operations → Color-Channel Attention
+   
+    This is the NECK counterpart of C2f_CA (backbone).
+    - C2f_CA uses Coordinate Attention (spatial awareness)
+    - C2f_CCA uses Color-Channel Attention (color/ripeness awareness)
+    """
+   
+    def __init__(self, c1, c2, n=1, shortcut=False, g=1, e=0.5):
+        super().__init__()
+        self.c = int(c2 * e)
+        self.cv1 = Conv(c1, 2 * self.c, 1, 1)
+        self.cv2 = Conv((2 + n) * self.c, c2, 1)
+        self.m = nn.ModuleList(
+            Bottleneck(self.c, self.c, shortcut, g, k=((3, 3), (3, 3)), e=1.0)
+            for _ in range(n)
+        )
+        # Color-Channel Attention instead of Coordinate Attention
+        self.attention = CCA(c2, c2, reduction=16)
+
+    def forward(self, x):
+        y = list(self.cv1(x).chunk(2, 1))
+        y.extend(m(y[-1]) for m in self.m)
+        return self.attention(self.cv2(torch.cat(y, 1)))
+
+    def forward_split(self, x):
+        y = list(self.cv1(x).split((self.c, self.c), 1))
+        y.extend(m(y[-1]) for m in self.m)
+        return self.attention(self.cv2(torch.cat(y, 1)))
     
 
 class RepC3(nn.Module):
