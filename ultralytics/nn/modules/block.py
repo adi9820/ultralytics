@@ -540,7 +540,6 @@ class CCA(nn.Module):
         return self.proj(x) * att
     
 class C3x(nn.Module):
-    class C2f(nn.Module):
     """Faster Implementation of CSP Bottleneck with 2 convolutions."""
 
     def __init__(self, c1: int, c2: int, n: int = 1, shortcut: bool = False, g: int = 1, e: float = 0.5):
