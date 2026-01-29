@@ -469,19 +469,20 @@ class C2f(nn.Module):
         self.cv1 = Conv(c1, 2 * self.c, 1, 1)
         self.cv2 = Conv((2 + n) * self.c, c2, 1)  # optional act=FReLU(c2)
         self.m = nn.ModuleList(Bottleneck(self.c, self.c, shortcut, g, k=((3, 3), (3, 3)), e=1.0) for _ in range(n))
+        self.ca = CoordinateAttention(c2, c2, reduction=32)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """Forward pass through C2f layer."""
         y = list(self.cv1(x).chunk(2, 1))
         y.extend(m(y[-1]) for m in self.m)
-        return self.cv2(torch.cat(y, 1))
+        return self.ca(self.cv2(torch.cat(y, 1)))
 
     def forward_split(self, x: torch.Tensor) -> torch.Tensor:
         """Forward pass using split() instead of chunk()."""
         y = self.cv1(x).split((self.c, self.c), 1)
         y = [y[0], y[1]]
         y.extend(m(y[-1]) for m in self.m)
-        return self.cv2(torch.cat(y, 1))
+        return self.ca(self.cv2(torch.cat(y, 1)))
 
 
 class C3(nn.Module):
@@ -539,38 +540,72 @@ class CCA(nn.Module):
         return self.proj(x) * att
     
 class C3x(nn.Module):
-    """
-    C2f with Color-Channel Attention.
-    Used in: NECK (RAFPN) for feature fusion
-   
-    Structure: C2f operations → Color-Channel Attention
-   
-    This is the NECK counterpart of C2f_CA (backbone).
-    - C2f_CA uses Coordinate Attention (spatial awareness)
-    - C2f_CCA uses Color-Channel Attention (color/ripeness awareness)
-    """
-   
-    def __init__(self, c1, c2, n=1, shortcut=False, g=1, e=0.5):
+    class C2f(nn.Module):
+    """Faster Implementation of CSP Bottleneck with 2 convolutions."""
+
+    def __init__(self, c1: int, c2: int, n: int = 1, shortcut: bool = False, g: int = 1, e: float = 0.5):
+        """Initialize a CSP bottleneck with 2 convolutions.
+
+        Args:
+            c1 (int): Input channels.
+            c2 (int): Output channels.
+            n (int): Number of Bottleneck blocks.
+            shortcut (bool): Whether to use shortcut connections.
+            g (int): Groups for convolutions.
+            e (float): Expansion ratio.
+        """
         super().__init__()
-        self.c = int(c2 * e)
+        self.c = int(c2 * e)  # hidden channels
         self.cv1 = Conv(c1, 2 * self.c, 1, 1)
-        self.cv2 = Conv((2 + n) * self.c, c2, 1)
-        self.m = nn.ModuleList(
-            Bottleneck(self.c, self.c, shortcut, g, k=((3, 3), (3, 3)), e=1.0)
-            for _ in range(n)
-        )
-        # Color-Channel Attention instead of Coordinate Attention
+        self.cv2 = Conv((2 + n) * self.c, c2, 1)  # optional act=FReLU(c2)
+        self.m = nn.ModuleList(Bottleneck(self.c, self.c, shortcut, g, k=((3, 3), (3, 3)), e=1.0) for _ in range(n))
         self.attention = CCA(c2, c2, reduction=16)
 
-    def forward(self, x):
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Forward pass through C2f layer."""
         y = list(self.cv1(x).chunk(2, 1))
         y.extend(m(y[-1]) for m in self.m)
         return self.attention(self.cv2(torch.cat(y, 1)))
 
-    def forward_split(self, x):
-        y = list(self.cv1(x).split((self.c, self.c), 1))
+    def forward_split(self, x: torch.Tensor) -> torch.Tensor:
+        """Forward pass using split() instead of chunk()."""
+        y = self.cv1(x).split((self.c, self.c), 1)
+        y = [y[0], y[1]]
         y.extend(m(y[-1]) for m in self.m)
         return self.attention(self.cv2(torch.cat(y, 1)))
+
+    # """
+    # C2f with Color-Channel Attention.
+    # Used in: NECK (RAFPN) for feature fusion
+   
+    # Structure: C2f operations → Color-Channel Attention
+   
+    # This is the NECK counterpart of C2f_CA (backbone).
+    # - C2f_CA uses Coordinate Attention (spatial awareness)
+    # - C2f_CCA uses Color-Channel Attention (color/ripeness awareness)
+    # """
+   
+    # def __init__(self, c1, c2, n=1, shortcut=False, g=1, e=0.5):
+    #     super().__init__()
+    #     self.c = int(c2 * e)
+    #     self.cv1 = Conv(c1, 2 * self.c, 1, 1)
+    #     self.cv2 = Conv((2 + n) * self.c, c2, 1)
+    #     self.m = nn.ModuleList(
+    #         Bottleneck(self.c, self.c, shortcut, g, k=((3, 3), (3, 3)), e=1.0)
+    #         for _ in range(n)
+    #     )
+    #     # Color-Channel Attention instead of Coordinate Attention
+    #     self.attention = CCA(c2, c2, reduction=16)
+
+    # def forward(self, x):
+    #     y = list(self.cv1(x).chunk(2, 1))
+    #     y.extend(m(y[-1]) for m in self.m)
+    #     return self.attention(self.cv2(torch.cat(y, 1)))
+
+    # def forward_split(self, x):
+    #     y = list(self.cv1(x).split((self.c, self.c), 1))
+    #     y.extend(m(y[-1]) for m in self.m)
+    #     return self.attention(self.cv2(torch.cat(y, 1)))
     
 
 class RepC3(nn.Module):
