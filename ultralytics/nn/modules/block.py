@@ -346,42 +346,43 @@ class C1(nn.Module):
         return out
 ### SOEM
 class C2(nn.Module):
-    def __init__(self, c, reduction=16):
+    def __init__(self, c1, c2=None, reduction=16):
         super().__init__()
-        mid = max(8, c // reduction)
+        c2 = c2 or c1
+        mid = max(8, c1 // reduction)
 
-        # Axis-wise spatial attention (cheap)
+        # Axis-wise spatial attention
         self.pool_h = nn.AdaptiveAvgPool2d((None, 1))
         self.pool_w = nn.AdaptiveAvgPool2d((1, None))
-        self.spatial = nn.Conv2d(c, 1, 1)
+        self.spatial = nn.Conv2d(c1, 1, 1)
 
-        # Channel attention (keep)
+        # Channel attention
         self.ca = nn.Sequential(
             nn.AdaptiveAvgPool2d(1),
-            nn.Conv2d(c, mid, 1),
+            nn.Conv2d(c1, mid, 1),
             nn.ReLU(inplace=True),
-            nn.Conv2d(mid, c, 1),
+            nn.Conv2d(mid, c1, 1),
             nn.Sigmoid()
         )
 
         # Depthwise refinement
         self.refine = nn.Sequential(
-            nn.Conv2d(c, c, 3, padding=1, groups=c),
-            nn.BatchNorm2d(c),
+            nn.Conv2d(c1, c1, 3, padding=1, groups=c1),
+            nn.BatchNorm2d(c1),
             nn.SiLU(inplace=True),
-            nn.Conv2d(c, c, 1)
+            nn.Conv2d(c1, c2, 1)
         )
 
         self.alpha = nn.Parameter(torch.tensor(0.3))
 
-    def forward(self, x):
-        # Efficient spatial mask
-        s = torch.sigmoid(
-            self.spatial(self.pool_h(x) + self.pool_w(x))
-        )
+        # Channel match if needed
+        self.match = nn.Conv2d(c1, c2, 1, bias=False) if c1 != c2 else nn.Identity()
 
+    def forward(self, x):
+        s = torch.sigmoid(self.spatial(self.pool_h(x) + self.pool_w(x)))
         out = x * s * self.ca(x)
-        return x + self.alpha * self.refine(out)
+        return self.match(x) + self.alpha * self.refine(out)
+
     # """
     # Small Object Enhancement Module for TMD-YOLO.
     # Enhances small object features through spatial and channel attention.
