@@ -238,52 +238,81 @@ class SPPF(nn.Module):
 
 ### Coordinate Attention
 class CoordinateAttention(nn.Module):
-    """
-    Coordinate Attention Module for TMD-YOLO.
-    Captures long-range dependencies with precise positional information.
-    
-    Paper: "Coordinate Attention for Efficient Mobile Network Design"
-    """
-    def __init__(self, in_channels, out_channels, reduction=32):
+    def __init__(self, c, reduction=32):
         super().__init__()
-        self.pool_h = nn.AdaptiveAvgPool2d((None, 1))  # (H, 1)
-        self.pool_w = nn.AdaptiveAvgPool2d((1, None))  # (1, W)
-        
-        mid_channels = max(8, in_channels // reduction)
-        
-        self.conv1 = nn.Conv2d(in_channels, mid_channels, kernel_size=1, stride=1, padding=0)
-        self.bn1 = nn.BatchNorm2d(mid_channels)
-        self.act = nn.SiLU(inplace=True)  # YOLOv8 uses SiLU
-        
-        self.conv_h = nn.Conv2d(mid_channels, out_channels, kernel_size=1, stride=1, padding=0)
-        self.conv_w = nn.Conv2d(mid_channels, out_channels, kernel_size=1, stride=1, padding=0)
-        
+        mid = max(8, c // reduction)
+
+        self.pool_h = nn.AdaptiveAvgPool2d((None, 1))
+        self.pool_w = nn.AdaptiveAvgPool2d((1, None))
+
+        # Shared bottleneck
+        self.conv1 = nn.Conv2d(c, mid, 1, bias=False)
+        self.bn1 = nn.BatchNorm2d(mid)
+        self.act = nn.SiLU(inplace=True)
+
+        # Depthwise projections (cheap)
+        self.conv_h = nn.Conv2d(mid, c, 1, groups=mid, bias=False)
+        self.conv_w = nn.Conv2d(mid, c, 1, groups=mid, bias=False)
+
     def forward(self, x):
-        identity = x
-        b, c, h, w = x.size()
-        
-        # Coordinate Embedding
-        x_h = self.pool_h(x)  # (B, C, H, 1)
-        x_w = self.pool_w(x).permute(0, 1, 3, 2)  # (B, C, W, 1) -> (B, C, 1, W) -> permute to (B, C, W, 1)
-        
-        # Concatenate along spatial dimension
-        y = torch.cat([x_h, x_w], dim=2)  # (B, C, H+W, 1)
-        
-        # Attention Generation
-        y = self.conv1(y)
-        y = self.bn1(y)
-        y = self.act(y)
-        
-        # Split
+        b, c, h, w = x.shape
+
+        x_h = self.pool_h(x)
+        x_w = self.pool_w(x).permute(0, 1, 3, 2)
+
+        y = torch.cat([x_h, x_w], dim=2)
+        y = self.act(self.bn1(self.conv1(y)))
+
         x_h, x_w = torch.split(y, [h, w], dim=2)
-        x_w = x_w.permute(0, 1, 3, 2)  # (B, C/r, 1, W)
+        x_w = x_w.permute(0, 1, 3, 2)
+
+        return x * torch.sigmoid(self.conv_h(x_h)) * torch.sigmoid(self.conv_w(x_w))
+    # """
+    # Coordinate Attention Module for TMD-YOLO.
+    # Captures long-range dependencies with precise positional information.
+    
+    # Paper: "Coordinate Attention for Efficient Mobile Network Design"
+    # """
+    # def __init__(self, in_channels, out_channels, reduction=32):
+    #     super().__init__()
+    #     self.pool_h = nn.AdaptiveAvgPool2d((None, 1))  # (H, 1)
+    #     self.pool_w = nn.AdaptiveAvgPool2d((1, None))  # (1, W)
         
-        # Attention Application
-        a_h = self.conv_h(x_h).sigmoid()
-        a_w = self.conv_w(x_w).sigmoid()
+    #     mid_channels = max(8, in_channels // reduction)
         
-        out = identity * a_h * a_w
-        return out
+    #     self.conv1 = nn.Conv2d(in_channels, mid_channels, kernel_size=1, stride=1, padding=0)
+    #     self.bn1 = nn.BatchNorm2d(mid_channels)
+    #     self.act = nn.SiLU(inplace=True)  # YOLOv8 uses SiLU
+        
+    #     self.conv_h = nn.Conv2d(mid_channels, out_channels, kernel_size=1, stride=1, padding=0)
+    #     self.conv_w = nn.Conv2d(mid_channels, out_channels, kernel_size=1, stride=1, padding=0)
+        
+    # def forward(self, x):
+    #     identity = x
+    #     b, c, h, w = x.size()
+        
+    #     # Coordinate Embedding
+    #     x_h = self.pool_h(x)  # (B, C, H, 1)
+    #     x_w = self.pool_w(x).permute(0, 1, 3, 2)  # (B, C, W, 1) -> (B, C, 1, W) -> permute to (B, C, W, 1)
+        
+    #     # Concatenate along spatial dimension
+    #     y = torch.cat([x_h, x_w], dim=2)  # (B, C, H+W, 1)
+        
+    #     # Attention Generation
+    #     y = self.conv1(y)
+    #     y = self.bn1(y)
+    #     y = self.act(y)
+        
+    #     # Split
+    #     x_h, x_w = torch.split(y, [h, w], dim=2)
+    #     x_w = x_w.permute(0, 1, 3, 2)  # (B, C/r, 1, W)
+        
+    #     # Attention Application
+    #     a_h = self.conv_h(x_h).sigmoid()
+    #     a_w = self.conv_w(x_w).sigmoid()
+        
+    #     out = identity * a_h * a_w
+    #     return out
 
 class C1(nn.Module):
     """
@@ -317,72 +346,108 @@ class C1(nn.Module):
         return out
 ### SOEM
 class C2(nn.Module):
-    """
-    Small Object Enhancement Module for TMD-YOLO.
-    Enhances small object features through spatial and channel attention.
-    Added after S3 stage (80x80 feature map) in backbone.
-    """
-    def __init__(self, c1, c2=None, reduction=16):
+    def __init__(self, c, reduction=16):
         super().__init__()
-        c2 = c2 or c1
-        
-        # Spatial Attention
-        self.spatial_conv1 = nn.Conv2d(c1, c1 // reduction, 1)
-        self.spatial_relu = nn.ReLU(inplace=True)
-        self.spatial_conv2 = nn.Conv2d(c1 // reduction, 1, 3, padding=1)
-        self.spatial_sigmoid = nn.Sigmoid()
-        
-        # Channel Attention
-        self.gap = nn.AdaptiveAvgPool2d(1)
-        self.channel_conv1 = nn.Conv2d(c1, c1 // reduction, 1)
-        self.channel_relu = nn.ReLU(inplace=True)
-        self.channel_conv2 = nn.Conv2d(c1 // reduction, c1, 1)
-        self.channel_sigmoid = nn.Sigmoid()
-        
-        # Feature Refinement
+        mid = max(8, c // reduction)
+
+        # Axis-wise spatial attention (cheap)
+        self.pool_h = nn.AdaptiveAvgPool2d((None, 1))
+        self.pool_w = nn.AdaptiveAvgPool2d((1, None))
+        self.spatial = nn.Conv2d(c, 1, 1)
+
+        # Channel attention (keep)
+        self.ca = nn.Sequential(
+            nn.AdaptiveAvgPool2d(1),
+            nn.Conv2d(c, mid, 1),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(mid, c, 1),
+            nn.Sigmoid()
+        )
+
+        # Depthwise refinement
         self.refine = nn.Sequential(
-            nn.Conv2d(c1, c1, 3, padding=1),
-            nn.BatchNorm2d(c1),
+            nn.Conv2d(c, c, 3, padding=1, groups=c),
+            nn.BatchNorm2d(c),
             nn.SiLU(inplace=True),
-            nn.Conv2d(c1, c2, 3, padding=1),
-            nn.BatchNorm2d(c2)
+            nn.Conv2d(c, c, 1)
         )
-        
-        # Learnable parameter
-        self.alpha = nn.Parameter(torch.ones(1, c2, 1, 1) * 0.5)
-        
-        # Match channels if different
-        self.match = nn.Conv2d(c1, c2, 1) if c1 != c2 else nn.Identity()
-        
+
+        self.alpha = nn.Parameter(torch.tensor(0.3))
+
     def forward(self, x):
-        # Spatial Attention
-        s_att = self.spatial_sigmoid(
-            self.spatial_conv2(
-                self.spatial_relu(
-                    self.spatial_conv1(x)
-                )
-            )
+        # Efficient spatial mask
+        s = torch.sigmoid(
+            self.spatial(self.pool_h(x) + self.pool_w(x))
         )
+
+        out = x * s * self.ca(x)
+        return x + self.alpha * self.refine(out)
+    # """
+    # Small Object Enhancement Module for TMD-YOLO.
+    # Enhances small object features through spatial and channel attention.
+    # Added after S3 stage (80x80 feature map) in backbone.
+    # """
+    # def __init__(self, c1, c2=None, reduction=16):
+    #     super().__init__()
+    #     c2 = c2 or c1
         
-        # Channel Attention
-        c_att = self.channel_sigmoid(
-            self.channel_conv2(
-                self.channel_relu(
-                    self.channel_conv1(
-                        self.gap(x)
-                    )
-                )
-            )
-        )
+    #     # Spatial Attention
+    #     self.spatial_conv1 = nn.Conv2d(c1, c1 // reduction, 1)
+    #     self.spatial_relu = nn.ReLU(inplace=True)
+    #     self.spatial_conv2 = nn.Conv2d(c1 // reduction, 1, 3, padding=1)
+    #     self.spatial_sigmoid = nn.Sigmoid()
         
-        # Integrated attention
-        attended = s_att * x * c_att
+    #     # Channel Attention
+    #     self.gap = nn.AdaptiveAvgPool2d(1)
+    #     self.channel_conv1 = nn.Conv2d(c1, c1 // reduction, 1)
+    #     self.channel_relu = nn.ReLU(inplace=True)
+    #     self.channel_conv2 = nn.Conv2d(c1 // reduction, c1, 1)
+    #     self.channel_sigmoid = nn.Sigmoid()
         
-        # Feature Refinement
-        refined = self.refine(attended)
+    #     # Feature Refinement
+    #     self.refine = nn.Sequential(
+    #         nn.Conv2d(c1, c1, 3, padding=1),
+    #         nn.BatchNorm2d(c1),
+    #         nn.SiLU(inplace=True),
+    #         nn.Conv2d(c1, c2, 3, padding=1),
+    #         nn.BatchNorm2d(c2)
+    #     )
         
-        # Output with residual
-        return self.match(x) + self.alpha * refined
+    #     # Learnable parameter
+    #     self.alpha = nn.Parameter(torch.ones(1, c2, 1, 1) * 0.5)
+        
+    #     # Match channels if different
+    #     self.match = nn.Conv2d(c1, c2, 1) if c1 != c2 else nn.Identity()
+        
+    # def forward(self, x):
+    #     # Spatial Attention
+    #     s_att = self.spatial_sigmoid(
+    #         self.spatial_conv2(
+    #             self.spatial_relu(
+    #                 self.spatial_conv1(x)
+    #             )
+    #         )
+    #     )
+        
+    #     # Channel Attention
+    #     c_att = self.channel_sigmoid(
+    #         self.channel_conv2(
+    #             self.channel_relu(
+    #                 self.channel_conv1(
+    #                     self.gap(x)
+    #                 )
+    #             )
+    #         )
+    #     )
+        
+    #     # Integrated attention
+    #     attended = s_att * x * c_att
+        
+    #     # Feature Refinement
+    #     refined = self.refine(attended)
+        
+    #     # Output with residual
+    #     return self.match(x) + self.alpha * refined
     
 
 class C2f(nn.Module):
