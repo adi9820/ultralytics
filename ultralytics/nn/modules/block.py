@@ -236,37 +236,8 @@ class SPPF(nn.Module):
         y = self.cv2(torch.cat(y, 1))
         return y + x if getattr(self, "add", False) else y
 
-### Coordinate Attention
-# class CoordinateAttention(nn.Module):
-#     def __init__(self, c, reduction=32):
-#         super().__init__()
-#         mid = max(8, c // reduction)
-
-#         self.pool_h = nn.AdaptiveAvgPool2d((None, 1))
-#         self.pool_w = nn.AdaptiveAvgPool2d((1, None))
-
-#         # Shared bottleneck
-#         self.conv1 = nn.Conv2d(c, mid, 1, bias=False)
-#         self.bn1 = nn.BatchNorm2d(mid)
-#         self.act = nn.SiLU(inplace=True)
-
-#         # Depthwise projections (cheap)
-#         self.conv_h = nn.Conv2d(mid, c, 1, groups=mid, bias=False)
-#         self.conv_w = nn.Conv2d(mid, c, 1, groups=mid, bias=False)
-
-#     def forward(self, x):
-#         b, c, h, w = x.shape
-
-#         x_h = self.pool_h(x)
-#         x_w = self.pool_w(x).permute(0, 1, 3, 2)
-
-#         y = torch.cat([x_h, x_w], dim=2)
-#         y = self.act(self.bn1(self.conv1(y)))
-
-#         x_h, x_w = torch.split(y, [h, w], dim=2)
-#         x_w = x_w.permute(0, 1, 3, 2)
-
-#         return x * torch.sigmoid(self.conv_h(x_h)) * torch.sigmoid(self.conv_w(x_w))
+## Coordinate Attention
+class CoordinateAttention(nn.Module):
     """
     Coordinate Attention Module for TMD-YOLO.
     Captures long-range dependencies with precise positional information.
@@ -346,43 +317,6 @@ class C1(nn.Module):
         return out
 ### SOEM
 class C2(nn.Module):
-    # def __init__(self, c1, c2=None, reduction=16):
-    #     super().__init__()
-    #     c2 = c2 or c1
-    #     mid = max(8, c1 // reduction)
-
-    #     # Axis-wise spatial attention
-    #     self.pool_h = nn.AdaptiveAvgPool2d((None, 1))
-    #     self.pool_w = nn.AdaptiveAvgPool2d((1, None))
-    #     self.spatial = nn.Conv2d(c1, 1, 1)
-
-    #     # Channel attention
-    #     self.ca = nn.Sequential(
-    #         nn.AdaptiveAvgPool2d(1),
-    #         nn.Conv2d(c1, mid, 1),
-    #         nn.ReLU(inplace=True),
-    #         nn.Conv2d(mid, c1, 1),
-    #         nn.Sigmoid()
-    #     )
-
-    #     # Depthwise refinement
-    #     self.refine = nn.Sequential(
-    #         nn.Conv2d(c1, c1, 3, padding=1, groups=c1),
-    #         nn.BatchNorm2d(c1),
-    #         nn.SiLU(inplace=True),
-    #         nn.Conv2d(c1, c2, 1)
-    #     )
-
-    #     self.alpha = nn.Parameter(torch.tensor(0.3))
-
-    #     # Channel match if needed
-    #     self.match = nn.Conv2d(c1, c2, 1, bias=False) if c1 != c2 else nn.Identity()
-
-    # def forward(self, x):
-    #     s = torch.sigmoid(self.spatial(self.pool_h(x) + self.pool_w(x)))
-    #     out = x * s * self.ca(x)
-    #     return self.match(x) + self.alpha * self.refine(out)
-
     """
     Small Object Enhancement Module for TMD-YOLO.
     Enhances small object features through spatial and channel attention.
@@ -541,39 +475,6 @@ class CCA(nn.Module):
         return self.proj(x) * att
     
 class C3x(nn.Module):
-    # """Faster Implementation of CSP Bottleneck with 2 convolutions."""
-
-    # def __init__(self, c1: int, c2: int, n: int = 1, shortcut: bool = False, g: int = 1, e: float = 0.5):
-    #     """Initialize a CSP bottleneck with 2 convolutions.
-
-    #     Args:
-    #         c1 (int): Input channels.
-    #         c2 (int): Output channels.
-    #         n (int): Number of Bottleneck blocks.
-    #         shortcut (bool): Whether to use shortcut connections.
-    #         g (int): Groups for convolutions.
-    #         e (float): Expansion ratio.
-    #     """
-    #     super().__init__()
-    #     self.c = int(c2 * e)  # hidden channels
-    #     self.cv1 = Conv(c1, 2 * self.c, 1, 1)
-    #     self.cv2 = Conv((2 + n) * self.c, c2, 1)  # optional act=FReLU(c2)
-    #     self.m = nn.ModuleList(Bottleneck(self.c, self.c, shortcut, g, k=((3, 3), (3, 3)), e=1.0) for _ in range(n))
-    #     self.attention = CCA(c2, c2, reduction=16)
-
-    # def forward(self, x: torch.Tensor) -> torch.Tensor:
-    #     """Forward pass through C2f layer."""
-    #     y = list(self.cv1(x).chunk(2, 1))
-    #     y.extend(m(y[-1]) for m in self.m)
-    #     return self.attention(self.cv2(torch.cat(y, 1)))
-
-    # def forward_split(self, x: torch.Tensor) -> torch.Tensor:
-    #     """Forward pass using split() instead of chunk()."""
-    #     y = self.cv1(x).split((self.c, self.c), 1)
-    #     y = [y[0], y[1]]
-    #     y.extend(m(y[-1]) for m in self.m)
-    #     return self.attention(self.cv2(torch.cat(y, 1)))
-
     """
     C2f with Color-Channel Attention.
     Used in: NECK (RAFPN) for feature fusion
