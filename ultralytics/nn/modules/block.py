@@ -311,7 +311,7 @@ class C1(nn.Module):
         
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """Forward pass through the CSP bottleneck with 3 convolutions."""
-        return self.ca(self.cv3(torch.cat((self.m(self.ca(self.cv1(x))), self.ca(self.cv2(x))), 1)))
+        return self.ca(self.cv3(torch.cat((self.m(self.cv1(x)), self.cv2(x)), 1)))
     
     # """
     # C2f block with Coordinate Attention for TMD-YOLO backbone.
