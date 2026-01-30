@@ -502,29 +502,30 @@ class CCA(nn.Module):
         return self.proj(x) * att
     
 class C3x(nn.Module):
-     def __init__(self, c1: int, c2: int, n: int = 1, shortcut: bool = True, g: int = 1, e: float = 0.5):
-        """Initialize the CSP Bottleneck with 3 convolutions.
+    """CSP Bottleneck with Color-Channel Attention."""
 
-        Args:
-            c1 (int): Input channels.
-            c2 (int): Output channels.
-            n (int): Number of Bottleneck blocks.
-            shortcut (bool): Whether to use shortcut connections.
-            g (int): Groups for convolutions.
-            e (float): Expansion ratio.
-        """
+    def __init__(self, c1: int, c2: int, n: int = 1,
+                 shortcut: bool = True, g: int = 1, e: float = 0.5):
         super().__init__()
         c_ = int(c2 * e)  # hidden channels
+
         self.cv1 = Conv(c1, c_, 1, 1)
         self.cv2 = Conv(c1, c_, 1, 1)
-        self.cv3 = Conv(2 * c_, c2, 1)  # optional act=FReLU(c2)
-        self.m = nn.Sequential(*(Bottleneck(c_, c_, shortcut, g, k=((1, 1), (3, 3)), e=1.0) for _ in range(n)))
+        self.cv3 = Conv(2 * c_, c2, 1)
+
+        self.m = nn.Sequential(
+            *(Bottleneck(c_, c_, shortcut, g,
+                         k=((1, 1), (3, 3)), e=1.0)
+              for _ in range(n))
+        )
 
         self.attn = CCA(c2, c2, reduction=16)
-        
+
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """Forward pass through the CSP bottleneck with 3 convolutions."""
-        return self.attn(self.cv3(torch.cat((self.m(self.attn(self.cv1(x))), self.attn(self.cv2(x))), 1)))
+        y1 = self.attn(self.cv1(x))
+        y2 = self.attn(self.cv2(x))
+        y = torch.cat((self.m(y1), y2), 1)
+        return self.attn(self.cv3(y))
 
 
     # """
