@@ -522,8 +522,8 @@ class C3x(nn.Module):
         self.attn = CCA(c2, c2, reduction=16)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        y1 = self.attn(self.cv1(x))
-        y2 = self.attn(self.cv2(x))
+        y1 = self.cv1(x)
+        y2 = self.cv2(x)
         y = torch.cat((self.m(y1), y2), 1)
         return self.attn(self.cv3(y))
 
