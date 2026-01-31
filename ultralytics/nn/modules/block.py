@@ -354,24 +354,24 @@ class C2(nn.Module):
         c2 = c2 or c1
         
         # Spatial Attention
-        self.spatial_conv1 = nn.Conv2d(c1, c1 // reduction, 3, padding=1) ### 1->3, padding=1
+        self.spatial_conv1 = nn.Conv2d(c1, c1 // reduction, 1) ### 1->3, padding=1
         self.spatial_relu = nn.ReLU(inplace=True)
         self.spatial_conv2 = nn.Conv2d(c1 // reduction, 1, 3, padding=1) 
         self.spatial_sigmoid = nn.Sigmoid()
         
         # Channel Attention
         self.gap = nn.AdaptiveAvgPool2d(1)
-        self.channel_conv1 = nn.Conv2d(c1, c1 // reduction, 3, padding=1) ### 1->3, padding=1
+        self.channel_conv1 = nn.Conv2d(c1, c1 // reduction, 1) ### 1->3, padding=1
         self.channel_relu = nn.ReLU(inplace=True)
-        self.channel_conv2 = nn.Conv2d(c1 // reduction, c1, 3, padding=1) ### 1->3, padding=1
+        self.channel_conv2 = nn.Conv2d(c1 // reduction, c1, 1) ### 1->3, padding=1
         self.channel_sigmoid = nn.Sigmoid()
         
         # Feature Refinement
         self.refine = nn.Sequential(
-            nn.Conv2d(c1, c1, 3, padding=1), ### 3->5, padding 1->2 ##### padding 1->2
+            nn.Conv2d(c1, c1, 3, padding=1), ### 3->5, padding 1->2 
             nn.BatchNorm2d(c1),
             nn.SiLU(inplace=True),
-            nn.Conv2d(c1, c2, 3, padding=1), ### 3->5, padding 1->2 ##### padding 1->2
+            nn.Conv2d(c1, c2, 3, padding=1), ### 3->5, padding 1->2
             nn.BatchNorm2d(c2)
         )
         
@@ -495,7 +495,7 @@ class CCA(nn.Module):
             nn.Sigmoid()
         )
        
-        self.proj = nn.Conv2d(c1, c2, 3, padding=1, bias=False) if c1 != c2 else nn.Identity() ### 1->3, padding=1
+        self.proj = nn.Conv2d(c1, c2, 1, bias=False) if c1 != c2 else nn.Identity() ### 1->3, padding=1
 
     def forward(self, x):
         att = self.attention(x)
