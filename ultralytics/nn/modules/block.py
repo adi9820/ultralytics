@@ -368,10 +368,10 @@ class C2(nn.Module):
         
         # Feature Refinement
         self.refine = nn.Sequential(
-            nn.Conv2d(c1, c1, 5, padding=2), ### 3->5
+            nn.Conv2d(c1, c1, 3, padding=1), ### 3->5, padding 1->2 ##### padding 1->2
             nn.BatchNorm2d(c1),
             nn.SiLU(inplace=True),
-            nn.Conv2d(c1, c2, 5, padding=2), ### 3->5
+            nn.Conv2d(c1, c2, 3, padding=1), ### 3->5, padding 1->2 ##### padding 1->2
             nn.BatchNorm2d(c2)
         )
         
