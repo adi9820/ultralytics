@@ -128,7 +128,7 @@ backbone:
   # [from, repeats, module, args]
   - [-1, 1, Conv, [64, 3, 2]] # 0-P1/2
   - [-1, 1, Conv, [128, 3, 2]] # 1-P2/4
-  - [-1, 1, C1, [128, True]]  # 2
+  - [-1, 1, C1, [256, True]]  # 2
   - [-1, 1, Conv, [256, 3, 2]] # 3-P3/8
   - [-1, 1, C1, [256, True]]  # 4
   - [-1, 1, C2, [256]]  # 5
@@ -146,7 +146,7 @@ head:
 
   - [-1, 1, nn.Upsample, [None, 2, "nearest"]]
   - [[-1, 5], 1, Concat, [1]] # cat backbone P3
-  - [-1, 1, C3x, [512]] # 16 (P3/8-small)
+  - [-1, 1, C3x, [216]] # 16 (P3/8-small)
 
   - [-1, 1, Conv, [256, 3, 2]]
   - [[-1, 13], 1, Concat, [1]] # cat head P4
