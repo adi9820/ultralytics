@@ -123,7 +123,6 @@ scales: # model compound scaling constants, i.e. 'model=yolov8n.yaml' will call 
 #   - [[16, 19, 22], 1, Detect, [nc]] # Detect(P3, P4, P5)
 
 
-#TMD
 ## TMD -- C2PSA
 # YOLOv8.0n backbone
 backbone:
@@ -133,7 +132,7 @@ backbone:
   - [-1, 1, C1, [128, True]]  # 2
   - [-1, 1, Conv, [256, 3, 2]] # 3-P3/8
   - [-1, 1, C1, [512, True]]  # 4
-  #- [-1, 1, C2, [256]]  # 5
+  - [-1, 1, C2, [256]]  # 5
   - [-1, 1, Conv, [512, 3, 2]] # 6-P4/16
   - [-1, 1, C1, [512, True]]  # 7
   - [-1, 1, Conv, [1024, 3, 2]] # 8-P5/32
@@ -143,19 +142,19 @@ backbone:
 # YOLOv8.0n head
 head:
   - [-1, 1, nn.Upsample, [None, 2, "nearest"]]
-  - [[-1, 6], 1, Concat, [1]] # cat backbone P4
+  - [[-1, 7], 1, Concat, [1]] # cat backbone P4
   - [-1, 1, C2f, [512]] # 13
 
   - [-1, 1, nn.Upsample, [None, 2, "nearest"]]
-  - [[-1, 4], 1, Concat, [1]] # cat backbone P3
+  - [[-1, 5], 1, Concat, [1]] # cat backbone P3
   - [-1, 1, C2f, [256]] # 16 (P3/8-small)
 
   - [-1, 1, Conv, [256, 3, 2]]
-  - [[-1, 12], 1, Concat, [1]] # cat head P4
+  - [[-1, 13], 1, Concat, [1]] # cat head P4
   - [-1, 1, C2f, [512]] # 19 (P4/16-medium)
 
   - [-1, 1, Conv, [512, 3, 2]]
-  - [[-1, 9], 1, Concat, [1]] # cat head P5
+  - [[-1, 10], 1, Concat, [1]] # cat head P5
   - [-1, 1, C2f, [1024]] # 22 (P5/32-large)
 
-  - [[15, 18, 21], 1, Detect, [nc]] # Detect(P3, P4, P5)
+  - [[16, 19, 22], 1, Detect, [nc]] # Detect(P3, P4, P5)
