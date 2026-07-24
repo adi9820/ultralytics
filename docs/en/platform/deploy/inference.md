@@ -1,4 +1,6 @@
 ---
+plans: [free, pro, enterprise]
+title: Inference API Testing
 comments: true
 description: Learn how to test YOLO models with the Ultralytics Platform inference API including browser testing and programmatic access.
 keywords: Ultralytics Platform, inference, API, YOLO, object detection, prediction, testing
@@ -33,13 +35,14 @@ The predict panel supports multiple input methods:
 
 ```mermaid
 graph LR
-    A[Upload Image] --> D[Auto-Inference]
-    B[Example Image] --> D
-    C[Webcam Capture] --> D
-    D --> E[Results + Overlays]
+    A[Upload Image]:::start --> D[Auto-Inference]:::proc
+    B[Example Image]:::start --> D
+    C[Webcam Capture]:::start --> D
+    D --> E[Results + Overlays]:::out
 
-    style D fill:#2196F3,color:#fff
-    style E fill:#4CAF50,color:#fff
+    classDef start fill:#4CAF50,color:#fff
+    classDef proc fill:#2196F3,color:#fff
+    classDef out fill:#9C27B0,color:#fff
 ```
 
 ### Upload Image
@@ -164,10 +167,10 @@ POST https://platform.ultralytics.com/api/models/{modelId}/predict
 
     url = "https://platform.ultralytics.com/api/models/MODEL_ID/predict"
     headers = {"Authorization": "Bearer YOUR_API_KEY"}
-    files = {"file": open("image.jpg", "rb")}
     data = {"conf": 0.25, "iou": 0.7, "imgsz": 640}
 
-    response = requests.post(url, headers=headers, files=files, data=data)
+    with open("image.jpg", "rb") as image_file:
+        response = requests.post(url, headers=headers, files={"file": image_file}, data=data)
     print(response.json())
     ```
 
@@ -206,6 +209,18 @@ POST https://platform.ultralytics.com/api/models/{modelId}/predict
     ```
 
 ![Ultralytics Platform Predict Tab Code Examples Python Tab](https://cdn.jsdelivr.net/gh/ultralytics/assets@main/docs/platform/predict-tab-code-examples-python-tab.avif)
+
+### Request Parameters
+
+| Parameter   | Type   | Default | Range      | Description                                        |
+| ----------- | ------ | ------- | ---------- | -------------------------------------------------- |
+| `file`      | file   | -       | -          | Image or video file (required unless `source` set) |
+| `conf`      | float  | 0.25    | 0.01 – 1.0 | Minimum confidence threshold                       |
+| `iou`       | float  | 0.7     | 0.0 – 0.95 | NMS IoU threshold                                  |
+| `imgsz`     | int    | 640     | 32 – 1280  | Input image size in pixels                         |
+| `normalize` | bool   | false   | -          | Return bounding box coordinates as 0 – 1           |
+| `decimals`  | int    | 5       | 0 – 10     | Decimal precision for coordinate values            |
+| `source`    | string | -       | -          | Image URL or base64 string (alternative to `file`) |
 
 ### Response
 
@@ -258,6 +273,7 @@ POST https://platform.ultralytics.com/api/models/{modelId}/predict
 | `images`                        | array  | List of processed images          |
 | `images[].shape`                | array  | Image dimensions [height, width]  |
 | `images[].results`              | array  | List of detections                |
+| `images[].results[].class`      | int    | Class index (integer ID)          |
 | `images[].results[].name`       | string | Class name                        |
 | `images[].results[].confidence` | float  | Detection confidence (0-1)        |
 | `images[].results[].box`        | object | Bounding box coordinates          |
@@ -287,8 +303,51 @@ Response format varies by task:
       "name": "person",
       "confidence": 0.92,
       "box": {"x1": 100, "y1": 50, "x2": 300, "y2": 400},
-      "segments": [[100, 50], [150, 60], ...]
+      "segments": {"x": [100, 150, ...], "y": [50, 60, ...]}
     }
+    ```
+
+=== "Semantic"
+
+    ```json
+    {
+      "results": [
+        {"class": 0, "name": "road", "pixel_ratio": 0.42},
+        {"class": 1, "name": "building", "pixel_ratio": 0.23}
+      ]
+    }
+    ```
+
+    Semantic segmentation returns per-class pixel coverage (`pixel_ratio`, the fraction of image pixels assigned to each class) instead of per-object boxes.
+
+=== "Depth"
+
+    ```json
+    {
+      "results": [],
+      "depth": {
+        "shape": [480, 640],
+        "encoding": "png",
+        "data": "<base64 grayscale PNG>",
+        "min": 0.31,
+        "max": 79.9,
+        "bits": 8
+      }
+    }
+    ```
+
+    [Depth estimation](../../tasks/depth.md) returns a dense per-pixel map instead of per-object results: a base64-encoded grayscale PNG where `depth = pixel × max / divisor` and a pixel value of `0` means no depth. The optional `bits` request parameter selects the quantization — `8` (default, uint8 PNG, divisor 255), `12`, or `16` (uint16 PNG, divisor 65535). The map is returned at model inference resolution (`imgsz`), so resize it to the image dimensions if you need per-pixel alignment. Decode it with any image library:
+
+    ```python
+    import base64
+    import io
+
+    import numpy as np
+    from PIL import Image
+
+    depth = response["images"][0]["depth"]
+    pixels = np.asarray(Image.open(io.BytesIO(base64.b64decode(depth["data"]))))
+    meters = pixels * depth["max"] / (255.0 if depth["bits"] == 8 else 65535.0)  # 0 = no depth
     ```
 
 === "Pose"
@@ -299,12 +358,15 @@ Response format varies by task:
       "name": "person",
       "confidence": 0.92,
       "box": {"x1": 100, "y1": 50, "x2": 300, "y2": 400},
-      "keypoints": [
-        {"x": 200, "y": 75, "conf": 0.95},
-        ...
-      ]
+      "keypoints": {
+        "x": [200, ...],
+        "y": [75, ...],
+        "visible": [0.95, ...]
+      }
     }
     ```
+
+    The `visible` array contains per-keypoint confidence scores (0-1 floats), not COCO-style 0-2 visibility flags.
 
 === "Classification"
 
@@ -324,8 +386,16 @@ Response format varies by task:
       "class": 0,
       "name": "ship",
       "confidence": 0.89,
-      "box": {"x1": 100, "y1": 50, "x2": 300, "y2": 400},
-      "obb": {"x1": 105, "y1": 48, "x2": 295, "y2": 55, "x3": 290, "y3": 395, "x4": 110, "y4": 402}
+      "box": {
+        "x1": 105,
+        "y1": 48,
+        "x2": 295,
+        "y2": 55,
+        "x3": 290,
+        "y3": 395,
+        "x4": 110,
+        "y4": 402
+      }
     }
     ```
 
@@ -347,13 +417,14 @@ Shared inference is rate-limited to **20 requests/min per API key**. When thrott
 
 Common error responses:
 
-| Code | Message         | Solution                                                                             |
-| ---- | --------------- | ------------------------------------------------------------------------------------ |
-| 400  | Invalid image   | Check file format                                                                    |
-| 401  | Unauthorized    | Verify API key                                                                       |
-| 404  | Model not found | Check model ID                                                                       |
-| 429  | Rate limited    | Wait and retry, or use a [dedicated endpoint](endpoints.md) for unlimited throughput |
-| 500  | Server error    | Retry request                                                                        |
+| Code | Message             | Solution                                                                             |
+| ---- | ------------------- | ------------------------------------------------------------------------------------ |
+| 400  | Invalid image       | Check file format                                                                    |
+| 401  | Unauthorized        | Verify API key                                                                       |
+| 404  | Model not found     | Check model ID                                                                       |
+| 429  | Rate limited        | Wait and retry, or use a [dedicated endpoint](endpoints.md) for unlimited throughput |
+| 500  | Server error        | Retry request                                                                        |
+| 503  | Service unavailable | Predict service starting up or unreachable; wait briefly and retry                   |
 
 ## FAQ
 
