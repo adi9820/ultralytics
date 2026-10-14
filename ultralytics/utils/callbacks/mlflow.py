@@ -3,7 +3,8 @@
 MLflow Logging for Ultralytics YOLO.
 
 This module enables MLflow logging for Ultralytics YOLO. It logs metrics, parameters, and model artifacts.
-For setting up, a tracking URI should be specified. The logging can be customized using environment variables.
+A tracking URI may be specified with MLFLOW_TRACKING_URI (defaults to the 'mlflow' directory under the runs directory).
+The logging can be customized using environment variables.
 
 Commands:
     1. To set a project name:
@@ -17,14 +18,12 @@ Commands:
        It will by default start a local server at http://127.0.0.1:5000.
        To specify a different URI, set the MLFLOW_TRACKING_URI environment variable.
 
-    4. To kill all running MLflow server instances:
-        ps aux | grep 'mlflow' | grep -v 'grep' | awk '{print $2}' | xargs kill -9
 """
 
 import os
 from pathlib import Path
 
-from ultralytics.utils import LOGGER, RUNS_DIR, SETTINGS, TESTS_RUNNING, colorstr, env_bool
+from ultralytics.utils import LOGGER, RUNS_DIR, TESTS_RUNNING, colorstr, env_bool
 
 PREFIX = colorstr("MLflow: ")
 
@@ -52,16 +51,14 @@ def on_pretrain_routine_end(trainer):
         trainer (ultralytics.engine.trainer.BaseTrainer): The training object with arguments and parameters to log.
 
     Notes:
-        MLFLOW_TRACKING_URI: The URI for MLflow tracking. If not set, defaults to 'runs/mlflow'.
-        MLFLOW_EXPERIMENT_NAME: The name of the MLflow experiment. If not set, defaults to trainer.args.project.
+        MLFLOW_TRACKING_URI: The URI for MLflow tracking. If not set, defaults to RUNS_DIR / 'mlflow' ('runs/mlflow' by
+            default).
+        MLFLOW_EXPERIMENT_NAME: The name of the MLflow experiment. If not set, defaults to trainer.args.project, or
+            '/Shared/Ultralytics' if no project is set.
         MLFLOW_RUN: The name of the MLflow run. If not set, defaults to trainer.args.name.
         MLFLOW_KEEP_RUN_ACTIVE: Whether to keep the MLflow run active after training ends. Truthy values are
             "1", "true", "yes", "on", "y", "t" (case-insensitive); anything else is False.
     """
-    # Resolve enablement at call time (not import time) so test/training order can never permanently disable MLflow:
-    # `add_integration_callbacks` imports this module on the first training, which may run with mlflow off.
-    if not mlflow or SETTINGS["mlflow"] is not True:
-        return
     if TESTS_RUNNING and "test_mlflow" not in os.environ.get("PYTEST_CURRENT_TEST", ""):
         return  # do not log during unrelated pytest tests
 
@@ -108,7 +105,7 @@ def _log_metrics(trainer, metrics):
 
 
 def on_train_epoch_end(trainer):
-    """Log training metrics at the end of each train epoch to MLflow."""
+    """Log learning rates and training losses at the end of each train epoch to MLflow."""
     if mlflow and getattr(trainer, "_mlflow_active", False):
         _log_metrics(
             trainer,
@@ -120,7 +117,7 @@ def on_train_epoch_end(trainer):
 
 
 def on_fit_epoch_end(trainer):
-    """Log training metrics at the end of each fit epoch to MLflow."""
+    """Log validation metrics at the end of each fit epoch to MLflow."""
     if mlflow and getattr(trainer, "_mlflow_active", False):
         _log_metrics(trainer, sanitize_dict(trainer.metrics))
 

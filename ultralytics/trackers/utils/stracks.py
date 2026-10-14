@@ -26,12 +26,12 @@ def merge_track_pools(
     """Apply the standard end-of-frame bookkeeping to a tracker's persistent pools in place.
 
     Merges newly activated and re-found tracks into `tracker.tracked_stracks`, moves the transitioned tracks into
-    `tracker.lost_stracks`, dedups by IoU, appends removals to `tracker.removed_stracks`, and trims the removed buffer
-    to `removed_buffer` entries.
+    `tracker.lost_stracks`, dedups by IoU, stores this frame's removals in `tracker.removed_stracks_frame`, appends them
+    to `tracker.removed_stracks`, and trims the removed buffer to `removed_buffer` entries.
 
     Args:
         tracker (Any): Object exposing `tracked_stracks`, `lost_stracks`, `removed_stracks` lists.
-        activated (list): Tracks updated from the Tracked state this frame.
+        activated (list): Tracks updated from the Tracked state or newly activated this frame.
         refind (list): Tracks re-activated from the Lost state this frame.
         lost (list): Tracks transitioned to Lost this frame.
         removed (list): Tracks transitioned to Removed this frame.
@@ -50,6 +50,7 @@ def merge_track_pools(
     tracker.tracked_stracks, tracker.lost_stracks = remove_duplicate_stracks(
         tracker.tracked_stracks, tracker.lost_stracks
     )
+    tracker.removed_stracks_frame = removed
     tracker.removed_stracks.extend(removed)
     if len(tracker.removed_stracks) > removed_buffer:
         tracker.removed_stracks = tracker.removed_stracks[-removed_buffer:]
@@ -169,7 +170,10 @@ def multi_gmc(stracks: list, H: np.ndarray) -> None:
 
     multi_mean = np.matmul(R8x8, multi_mean[..., None])[..., 0]
     multi_mean[:, :2] += t
-    multi_covariance = np.matmul(np.matmul(R8x8, multi_covariance), R8x8.T)
+    # Keep the right operand C-contiguous. An F-contiguous one sends matmul into BLAS's transposed-gemm kernel,
+    # which on macOS Accelerate leaves FP-exception flags set even for finite inputs — numpy then reports spurious
+    # divide/overflow/invalid RuntimeWarnings — and measures slower here than the untransposed kernel.
+    multi_covariance = np.matmul(np.matmul(R8x8, multi_covariance), np.ascontiguousarray(R8x8.T))
     for i, (mean, cov) in enumerate(zip(multi_mean, multi_covariance)):
         stracks[i].mean = mean
         stracks[i].covariance = cov

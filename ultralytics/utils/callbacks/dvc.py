@@ -2,11 +2,10 @@
 
 from pathlib import Path
 
-from ultralytics.utils import LOGGER, SETTINGS, TESTS_RUNNING, checks
+from ultralytics.utils import LOGGER, TESTS_RUNNING, checks
 
 try:
     assert not TESTS_RUNNING  # do not log pytest
-    assert SETTINGS["dvc"] is True  # verify integration is enabled
     import dvclive
 
     assert checks.check_version("dvclive", "2.11.0", verbose=True)
@@ -57,7 +56,7 @@ def _log_plots(plots: dict, prefix: str = "") -> None:
     """Log plot images for training progress if they have not been previously processed.
 
     Args:
-        plots (dict): Dictionary containing plot information with timestamps.
+        plots (dict): Dictionary mapping plot image paths to plot information with a 'timestamp' key.
         prefix (str, optional): Optional prefix to add to the logged image paths.
     """
     for name, params in plots.items():
